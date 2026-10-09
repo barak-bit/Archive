@@ -1,5 +1,6 @@
 # Builds and publishes the site to GitHub Pages.
 # Runs on every change to main, every 6 hours (to pick up new publications from the blockchain),
+# whenever a request (issue) is opened, edited or labeled (removal requests and the operator's "הסתרה" label),
 # and on demand from the Actions tab ("Run workflow").
 name: Build and publish
 
@@ -8,12 +9,15 @@ on:
     branches: [main]
   schedule:
     - cron: "17 */6 * * *"
+  issues:
+    types: [opened, edited, labeled, unlabeled, deleted]
   workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  issues: write
 
 concurrency:
   group: pages
@@ -34,6 +38,7 @@ jobs:
       - run: npm run build
         env:
           SITE_URL: ${{ steps.pages.outputs.base_url }}
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
