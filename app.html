@@ -114,6 +114,7 @@ details.manual summary { cursor: pointer; color: var(--accent); font-weight: 600
 .item:hover { background: var(--sheet); }
 .item .t { font-weight: 600; }
 .item .meta { color: var(--muted); font-size: 0.82rem; grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.item .ab { grid-column: 1 / -1; font-size: 0.9rem; color: var(--ink); opacity: .85; overflow-wrap: anywhere; }
 .ext { font-size: 0.75rem; font-weight: 600; color: var(--warn); background: var(--warn-soft); border-radius: 4px; padding: 0 6px; }
 .toggle { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; color: var(--muted); margin: -4px 0 12px; }
 .tag { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 0 6px; align-self: start; direction: ltr; }
@@ -185,15 +186,34 @@ a { color: var(--accent); }
           <label class="filebtn">בחירת קובץ<input type="file" id="fileInput" hidden></label>
         </div>
       </div>
-      <label class="f">כותרת <small>תופיע בארכיון ותירשם יחד עם המסמך</small>
-        <input type="text" id="title" value="הסכם שיתוף פעולה – דוגמה">
+      <p class="note" style="margin:0 0 12px">הפרטים האלה נרשמים לצמיתות יחד עם המסמך, וגלויים לכולם. הם מה שמאפשר למצוא את המסמך בחיפוש ולהבדיל אותו ממסמכים דומים. <b>שדות עם * הם חובה.</b></p>
+      <label class="f">כותרת * <small>שם ברור וייחודי, למשל "מנגנון נעילה מהירה ללוחות סולאריים – גרסה 2"</small>
+        <input type="text" id="title" maxlength="200" value="הסכם שיתוף פעולה – דוגמה">
       </label>
-      <label class="f">תקציר <small>לא חובה. עד 1,500 תווים. מופיע בדף הפרסום הציבורי ועוזר למצוא את המסמך בחיפוש.</small>
+      <label class="f">שם המפרסם * <small>אדם, חברה או מוסד. האתר לא מאמת זהות: זה השם כפי שהמפרסם מצהיר עליו.</small>
+        <input type="text" id="publisher" maxlength="120" autocomplete="organization">
+      </label>
+      <label class="f">סוג המסמך *
+        <select id="category">
+          <option value="">בחרו…</option>
+          <option>פרסום מונע / המצאה</option>
+          <option>תיאור טכני / מפרט</option>
+          <option>קוד ותוכנה</option>
+          <option>יצירה (טקסט, תווים, עיצוב)</option>
+          <option>מאמר / מחקר</option>
+          <option>חוזה / הסכם</option>
+          <option>הודעה / הצהרה</option>
+          <option>אחר</option>
+        </select>
+      </label>
+      <label class="f">תיאור המסמך * <small>לפחות 30 תווים, עד 1,500. מה המסמך, על מה הוא, ובמה הוא שונה ממסמכים דומים. מופיע בתוצאות החיפוש ובדף הפרסום הציבורי.</small>
         <textarea id="abstract" maxlength="1500" style="min-height:70px"></textarea>
       </label>
-      <label class="f">מילות מפתח <small>לא חובה. מופרדות בפסיקים.</small>
+      <label class="f">מילות מפתח <small>לא חובה, אבל עוזר לחיפוש. מופרדות בפסיקים.</small>
         <input type="text" id="keywords" maxlength="300">
       </label>
+      <p class="err" id="errMeta"></p>
+      <div class="banner warn" id="dupNote" hidden></div>
       <label class="f" id="textWrap">טקסט <span class="example">טקסט לדוגמה, החליפו בשלכם</span>
         <textarea id="text">הסכם שיתוף פעולה (דוגמה)
 
@@ -304,7 +324,7 @@ a { color: var(--accent); }
   <!-- ARCHIVE -->
   <div id="panel-archive" role="tabpanel" hidden>
     <div class="row" style="margin-bottom:14px">
-      <input type="text" id="search" placeholder="חיפוש בכותרות ובתוכן" style="flex:1;min-width:0">
+      <input type="text" id="search" placeholder="חיפוש: כותרת, מפרסם, תיאור, מילת מפתח, מזהה או טביעת אצבע" style="flex:1;min-width:0">
       <button class="btn ghost" id="reloadArchive">רענון</button>
     </div>
     <label class="toggle"><input type="checkbox" id="showExternal"> הצגת רישומים חיצוניים <span id="extCount"></span></label>
@@ -395,6 +415,31 @@ async function gunzip(bytes) {
   for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > DECOMPRESS_CAP) { reader.cancel(); throw new Error('too large'); } chunks.push(value); }
   const out = new Uint8Array(n); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out;
 }
+// Reads the plain text of a Word (.docx) or OpenDocument (.odt) file, for a preview that runs no code.
+async function officeText(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1; for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) return null;
+  let p = dv.getUint32(eocd + 16, true); const n = dv.getUint16(eocd + 10, true);
+  for (let k = 0; k < n && p + 46 <= bytes.length; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) return null;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true), nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    const name = dec.decode(bytes.subarray(p + 46, p + 46 + nl));
+    if (name === 'word/document.xml' || name === 'content.xml') {
+      const start = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
+      let raw = bytes.subarray(start, start + csize);
+      if (method === 8) raw = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      else if (method !== 0) return null;
+      const xml = dec.decode(raw);
+      const txt = xml.replace(/<w:tab\/>|<text:tab\/>/g, '\t').replace(/<w:br\/>|<text:line-break\/>/g, '\n').replace(/<\/w:p>|<\/text:p>|<\/text:h>/g, '\n').replace(/<[^>]+>/g, '')
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d)).replace(/&amp;/g, '&');
+      return txt.replace(/\n{3,}/g, '\n\n').trim();
+    }
+    p += 46 + nl + el + cl;
+  }
+  return null;
+}
+const isOffice = (t) => /wordprocessingml|opendocument\.text/.test(String(t || ''));
 const decodeBody = (body, encoding) => encoding === 'gzip' ? gunzip(body) : Promise.resolve(body);
 function safeType(type) {
   const t = String(type || '').split(';')[0].trim().toLowerCase();
@@ -436,7 +481,8 @@ async function prepareDoc() {
     $('costOut').textContent = '–'; return;
   }
   S.doc = E.makeDoc({ stored, contentEncoding: encoding, contentType: type, title: $('title').value.trim(), file, sha256: E.sha256Hex(bytes), size: bytes.length,
-    abstract: $('abstract').value.trim(), keywords: $('keywords').value.trim() });
+    abstract: $('abstract').value.trim(), keywords: $('keywords').value.trim(), publisher: $('publisher').value.trim(), category: $('category').value });
+  checkDuplicates();
   await sleep(0);
   S.sizes = E.measure(S.doc, NET.btc);
   if (token !== S.docToken) return;
@@ -471,7 +517,36 @@ function dropZone(el, fn) {
   el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) fn(f); });
 }
 $('feeRate').addEventListener('input', () => { resetFlow(); updateCost(); });
-let titleTimer; ['title', 'abstract', 'keywords'].forEach((id) => $(id).addEventListener('input', () => { clearTimeout(titleTimer); titleTimer = setTimeout(prepareDoc, 300); }));
+let titleTimer; ['title', 'abstract', 'keywords', 'publisher', 'category'].forEach((id) => $(id).addEventListener('input', () => { clearTimeout(titleTimer); $('errMeta').textContent = ''; titleTimer = setTimeout(prepareDoc, 300); }));
+try { $('publisher').value = localStorage.getItem('archiv.publisher') || ''; } catch {}
+
+// Required descriptive details: without them, documents in the archive can't be found or told apart.
+function metaProblem() {
+  const t = $('title').value.trim(), pub = $('publisher').value.trim(), ab = $('abstract').value.trim();
+  if (t.length < 3) return 'חסרה כותרת (לפחות 3 תווים).';
+  if (t.includes('דוגמה')) return 'הכותרת היא עדיין כותרת הדוגמה. כתבו כותרת משלכם.';
+  if (pub.length < 2) return 'חסר שם המפרסם.';
+  if (!$('category').value) return 'בחרו את סוג המסמך.';
+  if (ab.length < 30) return `התיאור קצר מדי (${ab.length} תווים, נדרשים לפחות 30). תארו מה המסמך ובמה הוא שונה ממסמכים דומים.`;
+  return '';
+}
+// Looks for the same content, or the same title, among the publications already loaded from the archive.
+function findDuplicates() {
+  if (!S.doc) return { same: null, title: null };
+  const pool = archive.items.filter((i) => i.official && !i.hidden && i.kind !== 'part');
+  const same = pool.find((i) => (i.kind === 'multipart' ? i.metadata.sha256 : i.docSha) === S.doc.sha256) || null;
+  const t = S.doc.title.trim().toLowerCase();
+  const title = t ? pool.find((i) => i !== same && (i.metadata.title || '').trim().toLowerCase() === t) || null : null;
+  return { same, title };
+}
+function checkDuplicates() {
+  let found; try { found = findDuplicates(); } catch { return; } // archive not initialised yet
+  const n = $('dupNote'), { same, title } = found;
+  const when = (i) => i.time ? new Date(i.time * 1000).toLocaleDateString('he-IL') : 'ממתין לאישור';
+  if (same) { n.hidden = false; n.textContent = `מסמך זהה בדיוק (אותה טביעת אצבע) כבר רשום בארכיון: "${same.metadata.title || 'ללא כותרת'}", ${when(same)}, מזהה ${same.txid.slice(0, 12)}…. אין צורך לרשום אותו שוב: הרישום הקיים הוא ההוכחה, והוא קודם בזמן.`; }
+  else if (title) { n.hidden = false; n.textContent = `כבר יש בארכיון מסמך עם הכותרת "${title.metadata.title}" (${when(title)}${title.metadata.publisher ? ', ' + title.metadata.publisher : ''}). כדאי לבחור כותרת שמבדילה את המסמך הזה, למשל עם גרסה או תאריך.`; }
+  else n.hidden = true;
+}
 
 function updateCost() {
   const rate = Number($('feeRate').value);
@@ -498,7 +573,9 @@ $('prepareBtn').addEventListener('click', () => {
   $('err2').textContent = '';
   try {
     if (!S.doc || !S.sizes) throw new Error('אין מסמך לרישום, או שהוא עדיין בעיבוד.');
-    if (!$('title').value.trim()) throw new Error('חסרה כותרת.');
+    const mp = metaProblem(); if (mp) { $('errMeta').textContent = mp; $('title').scrollIntoView({ behavior: 'smooth', block: 'center' }); throw new Error(mp); }
+    if (findDuplicates().same) throw new Error('המסמך הזה כבר רשום בארכיון (ראו ההודעה למעלה), ולכן לא נרשום אותו שוב.');
+    try { localStorage.setItem('archiv.publisher', $('publisher').value.trim()); } catch {}
     const rate = Number($('feeRate').value);
     if (!(rate >= 0.1)) throw new Error('העמלה חייבת להיות מספר חיובי.');
     const refund = $('refund').value.trim();
@@ -682,7 +759,7 @@ async function resume(json) {
     const r = JSON.parse(json);
     if (r.network !== CONFIG.network) throw new Error(`הקובץ שייך לרשת ${r.network}, והאתר מחובר ל-${CONFIG.network}.`);
     const { plan, refund } = E.importRecovery(r);
-    $('title').value = plan.doc.title; $('abstract').value = plan.doc.abstract || ''; $('keywords').value = plan.doc.keywords || ''; $('feeRate').value = plan.feeRate; $('refund').value = refund;
+    $('title').value = plan.doc.title; $('abstract').value = plan.doc.abstract || ''; $('keywords').value = plan.doc.keywords || ''; $('publisher').value = plan.doc.publisher || ''; $('category').value = plan.doc.category || ''; $('feeRate').value = plan.feeRate; $('refund').value = refund;
     S.doc = plan.doc; S.sizes = plan.sizes; showDocInfo(); updateCost();
     startPayment(plan, refund);
   } catch (e) { $('errRec').textContent = 'לא ניתן לטעון את הקובץ: ' + e.message; }
@@ -721,18 +798,32 @@ async function loadArchive(more = false) {
     st.hidden = any;
     if (!any) setStatus(st, 'ok', 'הארכיון עדיין ריק. המסמך הראשון יכול להיות שלכם.');
     renderArchive();
+    if (S.doc) checkDuplicates();
   } catch {
     setStatus(st, 'bad', online === false ? 'אין כאן גישה לרשת, ולכן אי אפשר לקרוא את הארכיון. אפשר לצפות בכתובת הארכיון ישירות ב-explorer.' : 'טעינת הארכיון נכשלה. נסו שוב בעוד רגע.');
     if (online === false) { archive.items = []; renderArchive(true); }
   }
 }
+function friendlyType(t) {
+  t = String(t || '').split(';')[0].trim().toLowerCase();
+  const map = { 'application/pdf': 'PDF', 'text/plain': 'טקסט', 'text/markdown': 'טקסט (Markdown)', 'text/html': 'HTML', 'image/png': 'תמונה', 'image/jpeg': 'תמונה', 'image/gif': 'תמונה', 'image/webp': 'תמונה',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'Word', 'application/msword': 'Word', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'Excel', 'application/zip': 'ZIP' };
+  return map[t] || (t.split('/')[1] || t || 'קובץ').slice(0, 20);
+}
 function visibleItems() {
   const q = $('search').value.trim().toLowerCase(), showExt = $('showExternal').checked;
   return archive.items.filter((i) => !i.hidden && i.kind !== 'part' && (i.official || showExt))
-    .filter((i) => !q || (i.metadata.title || '').toLowerCase().includes(q) || (i.metadata.file || '').toLowerCase().includes(q) || (i.metadata.abstract || '').toLowerCase().includes(q) || (i.metadata.keywords || '').toLowerCase().includes(q) || (i.text && i.text.toLowerCase().includes(q)));
+    .filter((i) => !q || q.split(/\s+/).every((w) => searchText(i).includes(w)));
+}
+// Everything a search can match: descriptive details, identifiers and (for text) the content itself.
+function searchText(i) {
+  const m = i.metadata;
+  return [m.title, m.publisher, m.category, m.abstract, m.keywords, m.file, i.txid, i.official ? m.sha256 : i.docSha, i.text].filter(Boolean).join(' \n ').toLowerCase();
 }
 function renderArchive(offline = false) {
-  const list = $('archList'); list.textContent = '';
+  const list = $('archList');
+  const viewer = $('viewer'); if (list.contains(viewer)) { list.after(viewer); viewer.hidden = true; } // keep the viewer when the list is redrawn
+  list.textContent = '';
   const ext = archive.items.filter((i) => !i.hidden && !i.official).length;
   $('extCount').textContent = ext ? `(${ext})` : '';
   if (offline) {
@@ -746,12 +837,13 @@ function renderArchive(offline = false) {
     if (it.kind === 'multipart') { const x = document.createElement('span'); x.className = 'parts'; x.textContent = `${(it.metadata.parts || []).length} חלקים`; t.append(' ', x); }
     if (!it.official) { const x = document.createElement('span'); x.className = 'ext'; x.textContent = 'חיצוני – לא נוצר דרך ארכיב'; t.append(' ', x); }
     const tag = document.createElement('span'); tag.className = 'tag';
-    tag.textContent = (it.kind === 'multipart' ? it.metadata.contentType : it.contentType || '').split(';')[0];
+    tag.textContent = it.metadata.category || friendlyType(it.kind === 'multipart' ? it.metadata.contentType : it.contentType);
     const meta = document.createElement('span'); meta.className = 'meta';
     const size = it.official ? it.metadata.size : (it.content || it.body).length;
-    [it.time ? new Date(it.time * 1000).toLocaleDateString('he-IL') : 'ממתין לאישור', fmtBytes(size || 0)].forEach((s) => { const x = document.createElement('span'); x.textContent = s; meta.append(x); });
+    [it.metadata.publisher ? 'מאת ' + it.metadata.publisher : '', it.time ? new Date(it.time * 1000).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : 'ממתין לאישור', friendlyType(it.kind === 'multipart' ? it.metadata.contentType : it.contentType), fmtBytes(size || 0)].filter(Boolean).forEach((s) => { const x = document.createElement('span'); x.textContent = s; meta.append(x); });
     const id = document.createElement('span'); id.className = 'mono'; id.textContent = it.txid.slice(0, 12) + '…'; meta.append(id);
-    b.append(t, tag, meta); b.addEventListener('click', () => openItem(it)); list.append(b);
+    b.append(t, tag, meta);
+    if (it.metadata.abstract) { const ab = document.createElement('span'); ab.className = 'ab'; ab.dir = 'auto'; ab.textContent = it.metadata.abstract.length > 200 ? it.metadata.abstract.slice(0, 200) + '…' : it.metadata.abstract; b.append(ab); } b.addEventListener('click', () => { b.after($('viewer')); openItem(it).catch((e) => { const v = $('viewer'); v.hidden = false; const d = document.createElement('div'); d.className = 'seal bad'; d.textContent = 'לא ניתן להציג את המסמך: ' + String(e.message || e).slice(0, 160); v.append(d); }); }); list.append(b);
   }
   if (!shown.length && archive.items.length && $('search').value.trim()) { const p = document.createElement('p'); p.style.color = 'var(--muted)'; p.textContent = 'אין תוצאות לחיפוש הזה.'; list.append(p); }
   $('moreBtn').hidden = archive.done || !archive.items.length;
@@ -783,12 +875,15 @@ async function assemble(it, onProgress) {
 }
 async function openItem(it) {
   const v = $('viewer'); v.hidden = false; v.textContent = '';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'btn ghost small'; close.textContent = 'סגירה ✕'; close.style.float = 'left';
+  close.addEventListener('click', () => { v.hidden = true; }); v.append(close);
   const m = it.metadata, multi = it.kind === 'multipart';
   const h = document.createElement('h3'); h.style.cssText = 'font-family:var(--display);margin:0 0 6px;font-size:1.3rem'; h.textContent = m.title || '(ללא כותרת)';
   const dl = document.createElement('dl'); dl.className = 'ledger';
-  const rows = [['מזהה המסמך', it.txid + 'i0', true], ['טביעת אצבע', it.official ? m.sha256 : it.docSha, true], ['קובץ מקורי', m.file || '–'], ['נרשם', fmtDate(it.time)],
+  const rows = [['מפרסם', m.publisher || 'לא צוין'], ['סוג', m.category || 'לא צוין'], ['מזהה המסמך', it.txid + 'i0', true], ['טביעת אצבע', it.official ? m.sha256 : it.docSha, true], ['קובץ מקורי', m.file || '–'], ['נרשם', fmtDate(it.time)],
     ['מקור', it.official ? 'נרשם דרך ארכיב' : 'רישום חיצוני, לא נוצר דרך ארכיב']];
-  if (multi) rows.splice(3, 0, ['חלקים', String((m.parts || []).length)]);
+  if (m.keywords) rows.splice(2, 0, ['מילות מפתח', m.keywords]);
+  if (multi) rows.push(['חלקים', String((m.parts || []).length)]);
   for (const [k, val, mono] of rows) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = val; if (mono) dd.className = 'mono'; dl.append(dt, dd); }
   const seal = document.createElement('div'); seal.className = 'seal wait'; seal.textContent = multi ? 'מרכיב את החלקים…' : 'בודק…';
   v.append(h);
@@ -814,10 +909,17 @@ async function openItem(it) {
   if (safe) { op.target = '_blank'; op.textContent = 'פתיחת הקובץ'; }
   else { op.download = (m.file || 'archiv-' + it.txid.slice(0, 8)).replace(/[\\/:*?"<>|]/g, '_'); op.textContent = 'הורדת הקובץ (לא נפתח בדפדפן מטעמי אבטחה)'; }
   links.append(op);
-  if (CONFIG.publicPages && it.official) { const pp = document.createElement('a'); pp.href = `p/${it.txid}.html`; pp.target = '_blank'; pp.rel = 'noopener'; pp.textContent = 'דף פרסום קבוע'; links.append(pp); }
+  if (CONFIG.publicPages && it.official && it.time) { const pp = document.createElement('a'); pp.href = `p/${it.txid}.html`; pp.target = '_blank'; pp.rel = 'noopener'; pp.textContent = 'דף פרסום קבוע'; links.append(pp); }
   if (NET.ordinals) { const oa = document.createElement('a'); oa.href = `${NET.ordinals}/inscription/${it.txid}i0`; oa.target = '_blank'; oa.rel = 'noopener'; oa.textContent = 'ב-ordinals.com'; links.append(oa); }
   v.append(links);
   if (/^text\//.test(type || '') && !/html/.test(type)) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = dec.decode(content); v.append(pre); }
+  else if (isOffice(type)) {
+    let txt = null; try { txt = await officeText(content); } catch {}
+    const note = document.createElement('p'); note.className = 'hint'; note.style.margin = '10px 0 0';
+    note.textContent = txt ? 'תצוגת הטקסט של המסמך (בלי עיצוב). המסמך המלא, כפי שנרשם: בכפתור ההורדה למעלה.' : 'לא ניתן להציג תצוגה מקדימה של הקובץ הזה. אפשר להוריד אותו ולפתוח ב-Word.';
+    v.append(note);
+    if (txt) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = txt; v.append(pre); }
+  }
   else if (/^application\/pdf/.test(type || '')) { const f = document.createElement('iframe'); f.src = url; f.title = m.title || 'PDF'; v.append(f); }
 }
 $('search').addEventListener('input', () => renderArchive(online === false));
@@ -872,4 +974,6 @@ fromText(); refreshPrepare(); loadFees();
 const pending = load('archiv.pending');
 if (pending) { $('recoveryIn').value = pending; $('recoverBox').open = true; }
 const h = (location.hash || '').slice(1); if (['archive', 'verify'].includes(h)) showTab(h);
+// Load the archive in the background so the registration form can warn about duplicates.
+if (!archive.loaded && online !== false) setTimeout(() => { if (!archive.loaded) loadArchive(); }, 800);
 </script>

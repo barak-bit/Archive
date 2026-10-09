@@ -123,6 +123,8 @@ pre{white-space:pre-wrap;word-break:break-word;background:var(--sheet);border:1p
 section{border-top:1px solid var(--rule);padding-top:14px;margin-top:22px}h2{font-size:1.1rem;margin:0 0 8px}
 ol{padding-inline-start:20px;margin:0}li{margin-bottom:6px}
 .list{list-style:none;padding:0;margin:0;border-top:1px solid var(--rule)}.list li{padding:12px 2px;border-bottom:1px solid var(--rule);margin:0}
+.search{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 8px}.search input,.search select{font:inherit;color:var(--ink);background:var(--sheet);border:1px solid var(--rule);border-radius:6px;padding:9px 11px}.search input{flex:1;min-width:0}
+p.meta{color:var(--muted);font-size:.85rem;margin:0 0 8px;min-height:1.2em}.list li[hidden]{display:none}
 .list a{font-weight:600;text-decoration:none}.list .meta{color:var(--muted);font-size:.85rem}.list p{margin:4px 0 0;font-size:.93rem}
 footer{margin-top:36px;color:var(--muted);font-size:.85rem;border-top:1px solid var(--rule);padding-top:12px}`;
 const FONTS = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@800&family=IBM+Plex+Sans+Hebrew:wght@400;600&family=IBM+Plex+Mono&display=swap">';
@@ -147,12 +149,13 @@ function publicationPage(it) {
     `<meta name="citation_title" content="${esc(title)}">`,
     `<meta name="citation_publication_date" content="${ymd(it.time).replace(/-/g, '/')}">`,
     `<meta name="citation_online_date" content="${ymd(it.time).replace(/-/g, '/')}">`,
+    m.publisher && `<meta name="citation_author" content="${esc(m.publisher)}"><meta name="author" content="${esc(m.publisher)}"><meta name="DC.creator" content="${esc(m.publisher)}">`,
     `<meta name="citation_publisher" content="${esc(SITE_NAME)}">`,
     ext === 'pdf' && `<meta name="citation_pdf_url" content="${esc(fileUrl)}">`,
     keywords.length && `<meta name="citation_keywords" content="${esc(keywords.join('; '))}">`,
     `<meta name="DC.date" content="${ymd(it.time)}"><meta name="DC.identifier" content="${esc(id)}">`,
     `<meta property="og:title" content="${esc(title)}"><meta property="og:type" content="article">`,
-    `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'CreativeWork', name: title, abstract: m.abstract || undefined, keywords: keywords.length ? keywords.join(', ') : undefined, datePublished: iso(it.time), identifier: id, url: url || undefined, sha256: m.sha256, publisher: { '@type': 'Organization', name: SITE_NAME } }).replace(/</g, '\\u003c')}</script>`,
+    `<script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'CreativeWork', name: title, abstract: m.abstract || undefined, keywords: keywords.length ? keywords.join(', ') : undefined, datePublished: iso(it.time), identifier: id, author: m.publisher ? { '@type': 'Thing', name: m.publisher } : undefined, genre: m.category || undefined, url: url || undefined, sha256: m.sha256, publisher: { '@type': 'Organization', name: SITE_NAME } }).replace(/</g, '\\u003c')}</script>`,
   ].filter(Boolean).join('\n');
   const ordLink = NET.ordinals ? `<a href="${NET.ordinals}/inscription/${id}" rel="noopener">ב-ordinals.com</a>` : '';
   let preview = '';
@@ -162,10 +165,12 @@ function publicationPage(it) {
   } else if (/^image\//.test(it.type) && ext) preview = `<section><img src="${it.txid}.${ext}" alt="${esc(title)}" style="max-width:100%;border:1px solid var(--rule);border-radius:6px"></section>`;
   const body = `<article>
 <h1 dir="auto">${esc(title)}</h1>
-<p class="lead">פורסם ב-${esc(heDate(it.time))} (שעון ישראל) · בלוק ${it.height}</p>
+<p class="lead">${m.publisher ? `מאת <b dir="auto">${esc(m.publisher)}</b> · ` : ''}פורסם ב-${esc(heDate(it.time))} (שעון ישראל) · בלוק ${it.height}</p>
 ${m.abstract ? `<p class="abstract" dir="auto">${esc(m.abstract)}</p>` : ''}
 <div class="seal">✓ התוכן נקרא מהבלוקצ'יין ותואם לטביעת האצבע שנרשמה</div>
 <dl>
+<dt>מפרסם</dt><dd dir="auto">${m.publisher ? esc(m.publisher) + ' <span style="color:var(--muted);font-size:.85em">(כפי שהמפרסם הצהיר; לא אומת)</span>' : 'לא צוין'}</dd>
+${m.category ? `<dt>סוג המסמך</dt><dd>${esc(m.category)}</dd>` : ''}
 <dt>מזהה הפרסום</dt><dd class="mono">${esc(id)}</dd>
 <dt>תאריך פרסום (UTC)</dt><dd class="mono">${esc(iso(it.time))}</dd>
 <dt>בלוק</dt><dd class="mono">${it.height}</dd>
@@ -189,10 +194,21 @@ ${preview}
 }
 
 function listPage(items) {
-  const rows = items.map((it) => `<li><a href="${it.txid}.html" dir="auto">${esc(it.meta.title || 'פרסום ללא כותרת')}</a>
-<div class="meta">${esc(heDate(it.time))} · בלוק ${it.height} · ${fmtBytes(it.content.length)}</div>${it.meta.abstract ? `<p dir="auto">${esc(it.meta.abstract.slice(0, 280))}${it.meta.abstract.length > 280 ? '…' : ''}</p>` : ''}</li>`).join('\n');
+  const rows = items.map((it) => {
+    const m = it.meta;
+    const hay = [m.title, m.publisher, m.category, m.abstract, m.keywords, m.file, it.txid, m.sha256, heDate(it.time)].filter(Boolean).join(' ').toLowerCase();
+    return `<li data-s="${esc(hay)}"><a href="${it.txid}.html" dir="auto">${esc(m.title || 'פרסום ללא כותרת')}</a>
+<div class="meta">${m.publisher ? `<span dir="auto">מאת ${esc(m.publisher)}</span> · ` : ''}${m.category ? `${esc(m.category)} · ` : ''}${esc(heDate(it.time))} · בלוק ${it.height} · ${fmtBytes(it.content.length)} · <span class="mono">${it.txid.slice(0, 12)}…</span></div>${m.abstract ? `<p dir="auto">${esc(m.abstract.slice(0, 280))}${m.abstract.length > 280 ? '…' : ''}</p>` : ''}</li>`;
+  }).join('\n');
+  const cats = [...new Set(items.map((it) => it.meta.category).filter(Boolean))].sort();
   const body = `<h1>כל הפרסומים</h1><p class="lead">${items.length} פרסומים, מהחדש לישן. עודכן ב-${esc(heDate(Date.now() / 1000))}.</p>
-<ul class="list">${rows || '<li>עדיין אין פרסומים.</li>'}</ul>`;
+<div class="search"><input type="search" id="q" placeholder="חיפוש: כותרת, מפרסם, תיאור, מילת מפתח, מזהה או טביעת אצבע" aria-label="חיפוש">
+${cats.length ? `<select id="cat" aria-label="סוג המסמך"><option value="">כל הסוגים</option>${cats.map((c) => `<option>${esc(c)}</option>`).join('')}</select>` : ''}</div>
+<p class="meta" id="count" aria-live="polite"></p>
+<ul class="list" id="list">${rows || '<li>עדיין אין פרסומים.</li>'}</ul>
+<script>(function(){var q=document.getElementById('q'),c=document.getElementById('cat'),n=document.getElementById('count'),li=[].slice.call(document.querySelectorAll('#list li[data-s]'));
+function run(){var w=q.value.trim().toLowerCase().split(/\\s+/).filter(Boolean),k=c?c.value.toLowerCase():'',shown=0;li.forEach(function(x){var s=x.getAttribute('data-s'),ok=w.every(function(t){return s.indexOf(t)>=0})&&(!k||s.indexOf(k)>=0);x.hidden=!ok;if(ok)shown++});n.textContent=(w.length||k)?(shown?shown+' תוצאות':'אין תוצאות'):'';try{history.replaceState(null,'',q.value?'#q='+encodeURIComponent(q.value):location.pathname)}catch(e){}}
+var m=location.hash.match(/^#q=(.*)$/);if(m)q.value=decodeURIComponent(m[1]);q.addEventListener('input',run);if(c)c.addEventListener('change',run);run();})();</script>`;
   return shell({ title: `כל הפרסומים · ${SITE_NAME}`, head: `<meta name="description" content="רשימת כל הפרסומים בארכיון ${esc(SITE_NAME)}">${SITE ? `<link rel="canonical" href="${SITE}p/">` : ''}`, body });
 }
 
@@ -209,7 +225,7 @@ for (const it of items) {
 writeFileSync(new URL('index.html', P), listPage(items));
 writeFileSync(new URL('index.json', P), JSON.stringify({
   archive: ARCHIVE, network: config.network, generated: new Date().toISOString(),
-  publications: items.map((it) => ({ id: it.txid + 'i0', txid: it.txid, title: it.meta.title || '', abstract: it.meta.abstract || '', keywords: it.meta.keywords || '',
+  publications: items.map((it) => ({ id: it.txid + 'i0', txid: it.txid, title: it.meta.title || '', publisher: it.meta.publisher || '', category: it.meta.category || '', abstract: it.meta.abstract || '', keywords: it.meta.keywords || '',
     published: iso(it.time), block: it.height, sha256: it.meta.sha256, size: it.content.length, contentType: it.type, parts: it.parts, page: `p/${it.txid}.html` })),
 }, null, 1));
 if (SITE) {

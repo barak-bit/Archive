@@ -25,7 +25,7 @@ assert.equal(btc.Script.decode(E.archivePayment(net).leaves[0].script)[0], 'RETU
 {
   const text = 'חוזה לדוגמה – סעיף 1: הצדדים מסכימים.\n'.repeat(400);
   const raw = utf8.decode(text);
-  const doc = docFrom(raw, 'text/plain;charset=utf-8', 'חוזה', 'c.txt', true, { abstract: 'תקציר לבדיקה', keywords: 'חוזה, בדיקה' });
+  const doc = docFrom(raw, 'text/plain;charset=utf-8', 'חוזה', 'c.txt', true, { abstract: 'תקציר לבדיקה', keywords: 'חוזה, בדיקה', publisher: 'ישראלה ישראלי בע"מ', category: 'חוזה / הסכם' });
   assert.equal(doc.contentEncoding, 'gzip');
   const secret = E.newSecret();
   const plan = E.createPlan(doc, net, secret, 2);
@@ -40,6 +40,13 @@ assert.equal(btc.Script.decode(E.archivePayment(net).leaves[0].script)[0], 'RETU
   assert.equal(p.metadata.sha256, E.sha256Hex(raw));
   assert.equal(p.metadata.abstract, 'תקציר לבדיקה');
   assert.equal(p.metadata.keywords, 'חוזה, בדיקה');
+  assert.equal(p.metadata.publisher, 'ישראלה ישראלי בע"מ');
+  assert.equal(p.metadata.category, 'חוזה / הסכם');
+  { const back = E.importRecovery(E.exportRecovery(plan, 'testnet4')); assert.equal(back.plan.doc.publisher, 'ישראלה ישראלי בע"מ'); assert.equal(E.buildTransactions(back.plan, utxo).txs[0].txid, out.txs[0].txid); }
+  // old recovery files (no publisher/category) still load
+  { const d0 = E.makeDoc({ ...doc, publisher: '', category: '' }); const p0 = E.createPlan(d0, net, secret, 2);
+    const r = JSON.parse(E.exportRecovery(p0, 'testnet4')); delete r.doc.publisher; delete r.doc.category; E.importRecovery(r);
+    assert.ok(!('publisher' in E.parseWitnessHex(witnessHex(parse(E.buildTransactions(p0, utxo).txs[0].hex))).metadata)); }
   assert.ok(Number(utxo.value - 546) / tx.vsize >= 2);
   console.log('single: raw', raw.length, 'stored', doc.stored.length, 'vsize', tx.vsize, 'total', plan.total);
   // overpay + refund

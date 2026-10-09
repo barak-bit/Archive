@@ -42,20 +42,23 @@ export const derive = (secret, label) => sha256(concat(secret, utf8.decode('arch
 // ---------- documents ----------
 // doc = { stored, contentEncoding ('' | 'gzip'), contentType, title, file, sha256, size }
 // `stored` is what goes on chain (maybe gzip); sha256 and size describe the original file.
-export const MAX_ABSTRACT = 1500, MAX_KEYWORDS = 300;
-export function makeDoc({ stored, contentEncoding = '', contentType, title = '', file = '', sha256: docHash, size, abstract = '', keywords = '' }) {
+export const MAX_ABSTRACT = 1500, MAX_KEYWORDS = 300, MAX_PUBLISHER = 120, MAX_CATEGORY = 40;
+export function makeDoc({ stored, contentEncoding = '', contentType, title = '', file = '', sha256: docHash, size, abstract = '', keywords = '', publisher = '', category = '' }) {
   if (!(stored instanceof Uint8Array) || !stored.length) throw new Error('empty document');
   if (stored.length > MAX_DOC) throw new Error('document too large');
   if (contentEncoding && contentEncoding !== 'gzip') throw new Error('unsupported encoding');
   if (!/^[0-9a-f]{64}$/.test(docHash || '')) throw new Error('missing document hash');
   return { stored, contentEncoding, contentType: contentType || 'application/octet-stream', title, file, sha256: docHash, size: size ?? stored.length,
-    abstract: String(abstract).slice(0, MAX_ABSTRACT), keywords: String(keywords).slice(0, MAX_KEYWORDS) };
+    abstract: String(abstract).slice(0, MAX_ABSTRACT), keywords: String(keywords).slice(0, MAX_KEYWORDS),
+    publisher: String(publisher).slice(0, MAX_PUBLISHER), category: String(category).slice(0, MAX_CATEGORY) };
 }
 export const partCount = (doc) => Math.ceil(doc.stored.length / MAX_PART);
 const baseMeta = (doc) => {
   const m = { app: ARCHIVE_TAG, title: doc.title, file: doc.file, sha256: doc.sha256, size: doc.size };
   if (doc.abstract) m.abstract = doc.abstract;
   if (doc.keywords) m.keywords = doc.keywords;
+  if (doc.publisher) m.publisher = doc.publisher;
+  if (doc.category) m.category = doc.category;
   return m;
 };
 
@@ -211,7 +214,7 @@ export function parseWitnessHex(witnessHex) {
 export function exportRecovery(plan, networkName, refundAddress = '') {
   const d = plan.doc;
   return JSON.stringify({ v: 2, network: networkName, secret: hex.encode(plan.secret), feeRate: plan.feeRate, refund: refundAddress, payAddress: plan.payAddress,
-    doc: { stored: hex.encode(d.stored), contentEncoding: d.contentEncoding, contentType: d.contentType, title: d.title, file: d.file, sha256: d.sha256, size: d.size, abstract: d.abstract, keywords: d.keywords } });
+    doc: { stored: hex.encode(d.stored), contentEncoding: d.contentEncoding, contentType: d.contentType, title: d.title, file: d.file, sha256: d.sha256, size: d.size, abstract: d.abstract, keywords: d.keywords, publisher: d.publisher, category: d.category } });
 }
 export function importRecovery(json) {
   const r = typeof json === 'string' ? JSON.parse(json) : json;

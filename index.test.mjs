@@ -37,6 +37,8 @@ try {
   const tp = readFileSync(P(chain.named.text + '.html'), 'utf8');
   assert.ok(tp.includes('מסובבים את התפס עד הנקישה'));
   assert.ok(tp.includes('בלי ברגים ובלי כלים'));
+  assert.ok(tp.includes('<meta name="citation_author" content="סולאר-טק בע&quot;מ">'));
+  assert.ok(tp.includes('מאת <b dir="auto">סולאר-טק בע&quot;מ</b>'));
   assert.match(tp, /citation_publication_date" content="\d{4}\/\d{2}\/\d{2}"/);
   assert.match(tp, /<link rel="canonical" href="https:\/\/example\.github\.io\/archiv\/p\/[0-9a-f]{64}\.html">/);
   assert.equal(readFileSync(P(chain.named.text + '.txt'), 'utf8'), chain.textBody);
@@ -49,6 +51,10 @@ try {
   // list, sitemap, robots
   const list = readFileSync(P('index.html'), 'utf8');
   assert.ok(list.indexOf('מפרט טכני מלא') < list.indexOf('פרסום לדוגמה 1<'), 'newest first');
+  assert.ok(list.includes('id="q"') && list.includes('<option>פרסום מונע / המצאה</option>'), 'search box and type filter');
+  assert.ok(list.includes('מאת סולאר-טק'));
+  const ij = JSON.parse(readFileSync(P('index.json'), 'utf8'));
+  assert.equal(ij.publications.find((x) => x.txid === chain.named.text).publisher, 'סולאר-טק בע"מ');
   const sm = readFileSync(join(out, 'sitemap.xml'), 'utf8');
   assert.equal((sm.match(/<loc>/g) || []).length, 2 + 26 + 1);
   assert.ok(readFileSync(join(out, 'robots.txt'), 'utf8').includes('Sitemap: https://example.github.io/archiv/sitemap.xml'));

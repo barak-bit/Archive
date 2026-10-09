@@ -41,7 +41,7 @@ export function buildChain() {
   const add = (name, txs) => { named[name] = txs[txs.length - 1].id; regs.push(txs); };
   for (let i = 1; i <= 22; i++) add('filler' + i, register(makeDoc(utf8.decode(`פרסום מספר ${i}: תיאור קצר של המצאה לדוגמה.`), 'text/plain;charset=utf-8', `פרסום לדוגמה ${i}`)));
   const textBody = 'שיטה לחיבור לוחות סולאריים בלי כלים.\n\n1. מניחים את הלוח על המסילה.\n2. מסובבים את התפס עד הנקישה.\n';
-  add('text', register(makeDoc(utf8.decode(textBody), 'text/plain;charset=utf-8', 'תפס מהיר ללוחות סולאריים', { abstract: 'תפס שמחבר לוח סולארי למסילה בסיבוב אחד, בלי ברגים ובלי כלים.', keywords: 'סולארי, תפס, התקנה' })));
+  add('text', register(makeDoc(utf8.decode(textBody), 'text/plain;charset=utf-8', 'תפס מהיר ללוחות סולאריים', { abstract: 'תפס שמחבר לוח סולארי למסילה בסיבוב אחד, בלי ברגים ובלי כלים.', keywords: 'סולארי, תפס, התקנה', publisher: 'סולאר-טק בע"מ', category: 'פרסום מונע / המצאה' })));
   add('gzip', register(makeDoc(utf8.decode('Claim: a method for archiving documents permanently.\n'.repeat(4000)), 'text/plain;charset=utf-8', 'Long gzip text')));
   const pdf = new Uint8Array(randomBytes(800_000)); pdf.set(utf8.decode('%PDF-1.7\n'));
   add('multipart', register(makeDoc(pdf, 'application/pdf', 'מפרט טכני מלא', { abstract: 'מפרט של 120 עמודים.', file: 'spec.pdf' })));
@@ -74,6 +74,8 @@ export function serve(chain, port = 0) {
     }
     if ((m = u.match(/^\/address\/(\w+)\/txs$/))) return send(200, m[1] === ARCHIVE ? chain.txs.slice(0, 25) : []);
     if ((m = u.match(/^\/tx\/([0-9a-f]{64})$/))) return byId.has(m[1]) ? send(200, byId.get(m[1])) : send(404, 'Transaction not found');
+    // Like mempool.space: /status answers 200 {"confirmed":false} even for unknown transactions.
+    if ((m = u.match(/^\/tx\/([0-9a-f]{64})\/status$/))) return send(200, byId.get(m[1])?.status || { confirmed: false });
     if (u === '/v1/fees/recommended') return send(200, { fastestFee: 3, halfHourFee: 2, hourFee: 1, economyFee: 1, minimumFee: 1 });
     send(404, 'not found');
   });
