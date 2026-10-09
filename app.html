@@ -176,6 +176,11 @@ a { color: var(--accent); }
 
   <!-- REGISTER -->
   <div id="panel-register" role="tabpanel">
+    <div class="banner info" id="pendingBanner" hidden>
+      <strong>יש בדפדפן הזה רישום שלא הושלם <span id="pendingTitle"></span>.</strong>
+      אם כבר שילמתם עליו, המשיכו אותו כדי שיתפרסם (או כדי לקבל את הכסף בחזרה). אם לא שילמתם, אפשר למחוק אותו ולהתחיל רישום חדש.
+      <div class="row" style="margin-top:8px"><button type="button" class="btn small" id="pendingResume">המשך הרישום</button><button type="button" class="btn ghost small" id="pendingDiscard">מחיקה והתחלת רישום חדש</button></div>
+    </div>
     <section class="step" id="s1">
       <h2><span class="n">1</span>המסמך</h2>
       <p class="lead">טקסט או כל קובץ, עד כ-7MB. טקסט נדחס אוטומטית, ומסמך גדול מפוצל לחלקים בתשלום אחד.</p>
@@ -281,6 +286,11 @@ a { color: var(--accent); }
           <button class="btn small" id="cardBtn" hidden>תשלום בכרטיס אשראי</button>
         </div>
         <p class="err" id="cardErr"></p>
+        <label class="f">כתובת להחזר עודף <small id="refundHint"></small>
+          <input type="text" id="payRefund" class="mono" autocomplete="off">
+        </label>
+        <p class="err" id="refundErr"></p>
+        <div class="banner warn" id="underArea" hidden></div>
         <div class="status" id="payStatus"><span class="dot pulse"></span><span>ממתין לתשלום…</span></div>
         <details class="manual" id="manualPay">
           <summary>שילמתי, אבל התשלום לא זוהה</summary>
@@ -310,7 +320,7 @@ a { color: var(--accent); }
             <dt>מזהה המסמך</dt><dd class="mono" id="doneId"></dd>
             <dt>עמלות ששולמו</dt><dd class="mono" id="doneFee"></dd>
           </dl>
-          <div class="row"><a id="doneLink" href="#" target="_blank" rel="noopener">צפייה ב-explorer</a></div>
+          <div class="row"><a id="doneLink" href="#" target="_blank" rel="noopener">צפייה ב-explorer</a><button type="button" class="btn small" id="newDocBtn">רישום מסמך נוסף</button></div>
         </div>
       </div>
     </section>
@@ -380,7 +390,7 @@ const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder(), dec = new TextDecoder();
 const DECOMPRESS_CAP = 64 * 1024 * 1024;
 let online = null;
-const S = { doc: null, sizes: null, plan: null, built: null, usd: null, poll: null, docToken: 0, recovery: '', refund: '' };
+const S = { doc: null, sizes: null, plan: null, built: null, usd: null, poll: null, docToken: 0, recovery: '', refund: '', missing: 0n, paidKey: '' };
 
 // ---------- network ----------
 // The public API sometimes refuses bursts of requests or drops one (rate limits, a slow node). A refusal
@@ -576,7 +586,7 @@ function updateCost() {
 }
 async function loadFees() {
   try {
-    const f = await api('/v1/fees/recommended');
+    const f = await api('/v1/fees/recommended'); S.fees = f;
     $('feeRate').value = Math.max(1, f.halfHourFee);
     $('feeHint').textContent = `מומלץ עכשיו: ${f.halfHourFee} (חצי שעה), ${f.fastestFee} (בלוק הבא)`;
   } catch { $('feeHint').textContent = 'אין נתוני רשת; הזינו עמלה בעצמכם'; }
@@ -609,6 +619,7 @@ function startPayment(plan, refund, { recoveryKept = false } = {}) {
   save('archiv.pending', S.recovery);
   $('s3').classList.remove('locked'); $('payArea').hidden = false;
   setRecoveryKept(recoveryKept);
+  S.paidKey = ''; S.missing = 0n; $('underArea').hidden = true; $('payRefund').value = S.refund; $('payRefund').placeholder = $('refund').placeholder; refundHint();
   const wd = plan.doc.extra && plan.doc.extra.kind === 'withdraw';
   $('withdrawNote').hidden = !wd;
   if (wd) $('withdrawNote').textContent = `תשלום עבור בקשת הסרה של המסמך ${plan.doc.extra.target.slice(0, 12)}…. הבקשה נרשמת בבלוקצ'יין, ואחרי אישור בבלוק האתר מפסיק להציג את המסמך.`;
@@ -625,28 +636,103 @@ function startPayment(plan, refund, { recoveryKept = false } = {}) {
   $('s3').scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
   pollPayment();
 }
+// Clears steps 3–4. Never in the middle of sending transactions: that registration must finish.
 function resetFlow() {
-  if (!S.plan) return;
-  clearTimeout(S.poll); S.plan = null; S.built = null;
-  $('payArea').hidden = true; $('revealArea').hidden = true;
+  if (!S.plan || S.broadcasting) return;
+  clearTimeout(S.poll); S.plan = null; S.built = null; S.missing = 0n; S.paidKey = '';
+  $('payArea').hidden = true; $('revealArea').hidden = true; $('doneArea').hidden = true; $('underArea').hidden = true;
+  $('txList').textContent = ''; $('manualNote').hidden = true; $('retryBtn').hidden = true;
   $('s3').classList.add('locked'); $('s4').classList.add('locked');
 }
-// Finds the payment even after it was spent (needed when resuming), by reading the address history.
-async function findPayment(addr) {
+// After a finished registration: a clean form for the next document (the publisher's name stays).
+$('newDocBtn').addEventListener('click', () => {
+  resetFlow();
+  if (src.file) $('clearFile').click();
+  ['title', 'abstract', 'keywords', 'text', 'refund'].forEach((id) => { $(id).value = ''; });
+  $('category').value = ''; S.refund = '';
+  document.querySelectorAll('.decl').forEach((c) => { c.checked = false; }); refreshPrepare();
+  $('dupNote').hidden = true; $('errMeta').textContent = ''; $('err2').textContent = '';
+  fromText();
+  $('s1').scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
+});
+// Every payment to the address, even after it was spent (needed when resuming), from the address history.
+async function findPayments(addr) {
   const txs = await api(`/address/${addr}/txs`);
-  let best = null;
-  for (const tx of txs) tx.vout.forEach((o, i) => { if (o.scriptpubkey_address === addr && (!best || o.value > best.value)) best = { txid: tx.txid, vout: i, value: o.value, confirmed: tx.status.confirmed }; });
-  return best;
+  const out = [];
+  for (const tx of txs) tx.vout.forEach((o, i) => { if (o.scriptpubkey_address === addr) out.push({ txid: tx.txid, vout: i, value: o.value, confirmed: tx.status.confirmed }); });
+  return out;
+}
+const sumSats = (us) => us.reduce((n, u) => n + BigInt(u.value), 0n);
+
+// Overpayment comes back only to a refund address; without one it goes to the miners as fee.
+function refundHint() {
+  $('refundHint').textContent = S.refund ? 'עודף מעל כ-1,000 סאטושי יוחזר לכתובת הזו.' : 'לא חובה. בלי כתובת כזו, תשלום ביתר לא יוחזר: העודף ילך לכורים כעמלה. אם אינכם בטוחים בסכום, הזינו כאן כתובת מהארנק שלכם.';
+}
+function setRefund(addr) {
+  S.refund = addr; $('payRefund').value = addr; $('refund').value = addr;
+  S.recovery = E.exportRecovery(S.plan, CONFIG.network, S.refund); save('archiv.pending', S.recovery);
+  refundHint();
+}
+$('payRefund').addEventListener('change', () => {
+  const a = $('payRefund').value.trim(); $('refundErr').textContent = '';
+  if (a && !E.isAddress(a, NET.btc)) { $('refundErr').textContent = 'הכתובת אינה תקינה לרשת הזו.'; return; }
+  if (S.plan) setRefund(a);
+});
+
+// Paid too little: wait for the rest, publish now at a lower fee, or cancel and get the money back.
+function showUnderpaid(plan, pays, got, due) {
+  const key = pays.map((u) => u.txid + ':' + u.vout).join(',');
+  if (key === S.paidKey) return; // same situation as on the previous check: keep the panel (and what was typed)
+  // The difference is paid as one more payment, which itself adds a little fee: include it.
+  const next = E.amountDue(plan, pays.length + 1) - got;
+  S.paidKey = key; S.missing = next;
+  const box = $('underArea'); box.hidden = false; box.textContent = '';
+  const low = E.planWithin(plan, got, pays.length);
+  const h = document.createElement('strong'); h.textContent = `התקבלו ${fmtSats(got)} מתוך ${fmtSats(due)}. חסרים ${fmtSats(next)}.`;
+  const p = document.createElement('p'); p.style.margin = '6px 0';
+  p.textContent = `אפשר לשלוח את ההפרש (${fmtSats(next)}, כולל עמלה קטנה על התשלום הנוסף) לאותה כתובת תשלום, והרישום ימשיך לבד. או לבחור כאן:`;
+  const row = document.createElement('div'); row.className = 'row';
+  if (low) {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn small'; b.id = 'publishLowBtn';
+    b.textContent = `פרסום עכשיו בעמלה נמוכה יותר (${low.feeRate.toFixed(1)} sat/vB)`;
+    b.title = 'העמלה הנמוכה יכולה לעכב את האישור בבלוק';
+    b.addEventListener('click', () => {
+      clearTimeout(S.poll); S.plan = low; S.recovery = E.exportRecovery(low, CONFIG.network, S.refund); save('archiv.pending', S.recovery);
+      box.hidden = true; publish(pays);
+    });
+    row.append(b);
+  }
+  const ra = document.createElement('input'); ra.type = 'text'; ra.className = 'mono'; ra.id = 'cancelAddr'; ra.placeholder = 'כתובת להחזרת הכסף'; ra.value = S.refund || ''; ra.style.flex = '1';
+  const rb = document.createElement('button'); rb.type = 'button'; rb.className = 'btn ghost small'; rb.id = 'cancelRefundBtn'; rb.textContent = 'ביטול והחזרת הכסף';
+  const err = document.createElement('p'); err.className = 'err';
+  rb.addEventListener('click', async () => {
+    const addr = ra.value.trim(); err.textContent = '';
+    if (!E.isAddress(addr, NET.btc)) { err.textContent = 'הזינו כתובת תקינה של ארנק שלכם ברשת הזו.'; return; }
+    // A refund is not urgent: use the network's low (one-hour) fee rather than the registration's rate.
+    let r; try { r = E.buildRefund(plan, pays, addr, Math.max(1, (S.fees && S.fees.hourFee) || 1)); }
+    catch (e) { err.textContent = /too little/.test(e.message) ? 'הסכום קטן מדי להחזרה: עמלת הרשת גבוהה ממנו.' : e.message; return; }
+    rb.disabled = true; clearTimeout(S.poll);
+    try { await api('/tx', { method: 'POST', body: r.hex }); }
+    catch (e) { if (!/already|known|in chain/i.test(e.message)) { err.textContent = 'הרשת דחתה את עסקת ההחזרה: ' + String(e.message).slice(0, 140); rb.disabled = false; return; } }
+    save('archiv.pending', null); S.plan = null;
+    box.textContent = ''; const ok = document.createElement('p'); ok.style.margin = '0';
+    ok.textContent = `✓ הרישום בוטל. ${fmtSats(r.amount)} נשלחו אל ${addr} (עמלת רשת ${fmtSats(r.fee)}). עסקה: ${r.txid}`;
+    box.append(ok); setStatus($('payStatus'), 'ok', 'הכסף הוחזר.');
+  });
+  const rrow = document.createElement('div'); rrow.className = 'row'; rrow.style.marginTop = '8px'; rrow.append(ra, rb);
+  box.append(h, p, row, rrow, err);
 }
 async function pollPayment() {
   clearTimeout(S.poll);
   const plan = S.plan; if (!plan) return;
   try {
-    const u = await findPayment(plan.payAddress);
+    const pays = await findPayments(plan.payAddress);
     if (plan !== S.plan) return;
-    if (u) {
-      if (BigInt(u.value) < plan.total) setStatus($('payStatus'), 'bad', `התקבלו ${fmtSats(u.value)}, פחות מ-${fmtSats(plan.total)}. שלחו את ההפרש לאותה כתובת; העסקה תיבנה מהתשלום הגדול ביותר, ולכן עדיף לבטל ולהתחיל מחדש עם הסכום המלא.`);
-      else { setStatus($('payStatus'), 'ok', `התשלום התקבל (${fmtSats(u.value)}).`); return publish(u); }
+    if (pays.length) {
+      const got = sumSats(pays), due = E.amountDue(plan, pays.length);
+      if (got >= due) { $('underArea').hidden = true; S.missing = 0n; setStatus($('payStatus'), 'ok', `התשלום התקבל (${fmtSats(got)}).`); return publish(pays); }
+      setStatus($('payStatus'), 'bad', `התשלום חלקי. ממתין להפרש…`);
+      showUnderpaid(plan, pays, got, due);
     } else setStatus($('payStatus'), '', 'ממתין לתשלום… הבדיקה מתבצעת כל 10 שניות.');
   } catch {
     if (online === false) { setStatus($('payStatus'), 'bad', 'אין גישה לרשת. אחרי התשלום, הזינו את פרטי העסקה ידנית למטה.'); $('manualPay').open = true; return; }
@@ -657,12 +743,14 @@ $('manualPayBtn').addEventListener('click', () => {
   const txid = $('mTxid').value.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(txid)) return setStatus($('payStatus'), 'bad', 'מזהה העסקה צריך להיות 64 תווים הקסדצימליים.');
   clearTimeout(S.poll);
-  publish({ txid, vout: Number($('mVout').value), value: Number($('mValue').value) });
+  publish([{ txid, vout: Number($('mVout').value), value: Number($('mValue').value) }]);
 });
 $('unisatBtn').addEventListener('click', async () => {
   try {
-    await window.unisat.requestAccounts();
-    const txid = await window.unisat.sendBitcoin(S.plan.payAddress, Number(S.plan.total), { feeRate: Math.max(1, Math.ceil(S.plan.feeRate)) });
+    const [acct] = await window.unisat.requestAccounts();
+    if (!S.refund && acct && E.isAddress(acct, NET.btc)) setRefund(acct); // any excess comes back to the paying wallet
+    const amount = S.missing > 0n ? S.missing : S.plan.total; // after an underpayment, send only the difference
+    const txid = await window.unisat.sendBitcoin(S.plan.payAddress, Number(amount), { feeRate: Math.max(1, Math.ceil(S.plan.feeRate)) });
     setStatus($('payStatus'), '', `התשלום נשלח (${txid.slice(0, 10)}…). ממתין לזיהוי ברשת…`);
   } catch (e) { setStatus($('payStatus'), 'bad', 'UniSat: ' + (e.message || 'התשלום בוטל')); }
 });
@@ -718,12 +806,12 @@ async function txStatus(txid) {
   catch (e) { if (e.http === 404 || e.http === 400) return null; throw e; }
 }
 
-async function publish(utxo) {
+async function publish(utxos) {
   $('s4').classList.remove('locked'); $('revealArea').hidden = false; $('doneArea').hidden = true; $('retryBtn').hidden = true; $('manualNote').hidden = true;
   const st = $('revealStatus');
-  try { S.built = E.buildTransactions(S.plan, utxo, { refundAddress: S.refund || undefined }); }
+  try { S.built = E.buildTransactions(S.plan, utxos, { refundAddress: S.refund || undefined }); }
   catch (e) {
-    return setStatus(st, 'bad', /too small/.test(e.message) ? `הסכום שהתקבל (${fmtSats(utxo.value)}) נמוך מהנדרש (${fmtSats(S.plan.total)}).` : /refund/.test(e.message) ? 'כתובת ההחזר אינה תקינה לרשת הזו.' : e.message);
+    return setStatus(st, 'bad', e.missing ? `הסכום שהתקבל (${fmtSats(e.received)}) נמוך מהנדרש (${fmtSats(e.due)}). חסרים ${fmtSats(e.missing)}: שלחו אותם לכתובת התשלום.` : /refund/.test(e.message) ? 'כתובת ההחזר אינה תקינה לרשת הזו.' : e.message);
   }
   if (online === false) return showManual();
   renderTxList(false);
@@ -738,7 +826,7 @@ function showManual() {
 }
 async function broadcastAll() {
   const st = $('revealStatus'), txs = S.built.txs, w = S.built.waitAfter;
-  $('retryBtn').hidden = true;
+  $('retryBtn').hidden = true; S.broadcasting = true;
   try {
     for (let i = 0; i < txs.length; i++) {
       const t = txs[i];
@@ -768,7 +856,7 @@ async function broadcastAll() {
   } catch (e) {
     setStatus(st, 'bad', 'הרשת דחתה עסקה: ' + e.message + '. אפשר לנסות שוב; עסקאות שכבר נשלחו לא יישלחו פעמיים.');
     $('retryBtn').hidden = false;
-  }
+  } finally { S.broadcasting = false; }
 }
 $('retryBtn').addEventListener('click', () => broadcastAll());
 function showDone(sent) {
@@ -1182,8 +1270,16 @@ $('reportEmail').textContent = CONFIG.reportEmail;
 if (CONFIG.network === 'mainnet') { $('netPill').className = 'pill main'; $('netPill').textContent = 'רשת ראשית'; $('testBanner').hidden = true; $('refund').placeholder = 'bc1q…'; }
 else $('netPill').textContent = CONFIG.network === 'signet' ? 'רשת בדיקה (signet)' : 'רשת בדיקה (testnet4)';
 fromText(); refreshPrepare(); loadFees();
+// A registration this browser started and did not finish: offer to continue it, or to discard it.
 const pending = load('archiv.pending');
-if (pending) { $('recoveryIn').value = pending; $('recoverBox').open = true; }
+if (pending) {
+  let title = ''; try { const r = JSON.parse(pending); title = r.doc && (r.doc.extra && r.doc.extra.kind === 'withdraw' ? 'בקשת הסרה' : r.doc.title); } catch {}
+  $('recoveryIn').value = pending;
+  const b = $('pendingBanner'); b.hidden = false;
+  $('pendingTitle').textContent = title ? `"${title}"` : '';
+  $('pendingResume').addEventListener('click', () => { b.hidden = true; resume(pending); });
+  $('pendingDiscard').addEventListener('click', () => { b.hidden = true; save('archiv.pending', null); $('recoveryIn').value = ''; });
+}
 const h = (location.hash || '').slice(1); if (['archive', 'verify'].includes(h)) showTab(h);
 // Load the archive in the background so the registration form can warn about duplicates.
 if (!archive.loaded && online !== false) setTimeout(() => { if (!archive.loaded) loadArchive(); }, 800);

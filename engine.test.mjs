@@ -166,4 +166,19 @@ assert.equal(E.partCount({ stored: new Uint8Array(E.MAX_PART + 1) }), 2);
   assert.deepEqual([...oh.keys()], ['aa'.repeat(32), 'bb'.repeat(32)]);
 }
 
+// 10. underpaid: publish at a lower fee rate with the same payment address, or not at all
+{
+  const t = utf8.decode('underpaid example '.repeat(30));
+  const d = E.makeDoc({ stored: t, contentType: 'text/plain', sha256: E.sha256Hex(t), size: t.length });
+  const p = E.createPlan(d, net, E.newSecret(), 10);
+  const got = p.total * 6n / 10n; // paid 60%
+  const low = E.planWithin(p, got);
+  assert.ok(low && low.feeRate < 10 && low.feeRate >= 1, 'lower rate found: ' + (low && low.feeRate));
+  assert.equal(low.payAddress, p.payAddress, 'same payment address');
+  const o = E.buildTransactions(low, { txid: '44'.repeat(32), vout: 0, value: Number(got) });
+  assert.ok(o.txs.length === 1);
+  assert.equal(E.planWithin(p, 600n), null, 'too little even at the minimum rate');
+  console.log('underpaid: publishes at', low.feeRate.toFixed(2), 'sat/vB instead of 10');
+}
+
 console.log('ALL ENGINE TESTS PASSED');

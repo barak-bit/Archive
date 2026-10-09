@@ -98,22 +98,39 @@ function indexInscription(doc, partIds) {
 }
 
 // ---------- transactions ----------
+// The payment address of a single-part document has two script leaves: the inscription itself, and a
+// plain key leaf (same key). The key leaf lets the site spend extra payments cheaply and refund an
+// underpayment without revealing the document.
 function revealPayment(inscription, priv, net) {
-  return btc.p2tr(undefined, ordinals.p2tr_ord_reveal(btc.utils.pubSchnorr(priv), [inscription]), net, false, customScripts);
+  const pub = btc.utils.pubSchnorr(priv);
+  return btc.p2tr(undefined, [ordinals.p2tr_ord_reveal(pub, [inscription]), { script: btc.Script.encode([pub, 'CHECKSIG']) }], net, false, customScripts);
 }
 const keyPayment = (priv, net) => btc.p2tr(btc.utils.pubSchnorr(priv), undefined, net);
+const isKeyLeaf = ([, s]) => s.length === 35; // 32-byte key push + OP_CHECKSIG + leaf version
+const asList = (u) => (Array.isArray(u) ? u : [u]).slice().sort((a, b) => a.txid === b.txid ? a.vout - b.vout : a.txid < b.txid ? -1 : 1);
+const sum = (us) => us.reduce((n, u) => n + BigInt(u.value), 0n);
 
-function revealTx(payment, priv, utxo, net, change) {
+// Input 0 reveals the inscription; any further payments are spent through the key leaf.
+function revealTx(payment, priv, utxos, net, change) {
   const tx = new btc.Transaction({ customScripts });
-  tx.addInput({ ...payment, txid: utxo.txid, index: utxo.vout, witnessUtxo: { script: payment.script, amount: BigInt(utxo.value) } });
+  asList(utxos).forEach((u, i) => tx.addInput({ ...payment, tapLeafScript: payment.tapLeafScript.filter((l) => isKeyLeaf(l) === (i > 0)),
+    txid: u.txid, index: u.vout, witnessUtxo: { script: payment.script, amount: BigInt(u.value) } }));
   tx.addOutputAddress(archiveAddress(net), POSTAGE, net);
   if (change) tx.addOutputAddress(change.address, change.amount, net);
   tx.sign(priv, undefined, ZERO_AUX); tx.finalize();
   return tx;
 }
-function keySpendTx(payment, priv, utxo, outputs, net) {
+function keySpendTx(payment, priv, utxos, outputs, net) {
   const tx = new btc.Transaction();
-  tx.addInput({ txid: utxo.txid, index: utxo.vout, witnessUtxo: { script: payment.script, amount: BigInt(utxo.value) }, tapInternalKey: payment.tapInternalKey });
+  for (const u of asList(utxos)) tx.addInput({ txid: u.txid, index: u.vout, witnessUtxo: { script: payment.script, amount: BigInt(u.value) }, tapInternalKey: payment.tapInternalKey });
+  for (const o of outputs) tx.addOutputAddress(o.address, o.amount, net);
+  tx.sign(priv, undefined, ZERO_AUX); tx.finalize();
+  return tx;
+}
+// Spends payments through the key leaf only (single-part refund).
+function keyLeafTx(payment, priv, utxos, outputs, net) {
+  const tx = new btc.Transaction({ customScripts });
+  for (const u of asList(utxos)) tx.addInput({ ...payment, tapLeafScript: payment.tapLeafScript.filter(isKeyLeaf), txid: u.txid, index: u.vout, witnessUtxo: { script: payment.script, amount: BigInt(u.value) } });
   for (const o of outputs) tx.addOutputAddress(o.address, o.amount, net);
   tx.sign(priv, undefined, ZERO_AUX); tx.finalize();
   return tx;
@@ -127,7 +144,8 @@ export function measure(doc, net) {
   const k = new Uint8Array(32).fill(7);
   if (partCount(doc) === 1) {
     const ins = singleInscription(doc), pay = revealPayment(ins, k, net);
-    return { mode: 'single', reveal: revealTx(pay, k, DUMMY(), net).vsize,
+    const reveal = revealTx(pay, k, DUMMY(), net).vsize;
+    return { mode: 'single', reveal, extraInput: revealTx(pay, k, [DUMMY(), { ...DUMMY(), vout: 1 }], net).vsize - reveal,
       revealWithChange: revealTx(pay, k, DUMMY(), net, { address: archiveAddress(net), amount: 1000n }).vsize };
   }
   const parts = partInscriptions(doc).map((ins) => revealTx(revealPayment(ins, k, net), k, DUMMY(), net).vsize);
@@ -139,7 +157,8 @@ export function measure(doc, net) {
   const outs = Array.from({ length: parts.length + 1 }, () => ({ address: a, amount: 1000n }));
   const split = keySpendTx(kp, k, DUMMY(), outs, net).vsize;
   const splitWithChange = keySpendTx(kp, k, DUMMY(), [...outs, { address: a, amount: 1000n }], net).vsize;
-  return { mode: 'multi', parts, indexReveal, indexCommit, split, splitWithChange };
+  const extraInput = keySpendTx(kp, k, [DUMMY(), { ...DUMMY(), vout: 1 }], outs, net).vsize - split;
+  return { mode: 'multi', parts, indexReveal, indexCommit, split, splitWithChange, extraInput };
 }
 
 // Everything needed before payment: where the user pays and how much.
@@ -163,18 +182,22 @@ export function createPlan(doc, net, secret, feeRate, sizes = measure(doc, net))
     txCount: sizes.parts.length + 3, vsize, needsConfirmation: vsize > CHAIN_LIMIT_VB };
 }
 
-// After payment: every transaction, signed, in broadcast order.
+// What the payer owes when the payment arrives in `count` separate transactions (each extra one costs a little more fee).
+export const amountDue = (plan, count = 1) => plan.total + fee(Math.max(0, count - 1) * (plan.sizes.extraInput || 0), plan.feeRate);
+
+// After payment: every transaction, signed, in broadcast order. `utxo` is one payment or a list of them.
 // waitAfter: index of a transaction that must confirm before the rest are sent (-1 = send all at once).
 export function buildTransactions(plan, utxo, { refundAddress } = {}) {
-  const { net, feeRate } = plan, value = BigInt(utxo.value);
+  const { net, feeRate } = plan, utxos = asList(utxo), value = sum(utxos);
   if (refundAddress && !isAddress(refundAddress, net)) throw new Error('invalid refund address');
-  if (value < plan.total) throw new Error('payment too small');
-  const excess = value - plan.total;
+  const due = amountDue(plan, utxos.length);
+  if (value < due) throw Object.assign(new Error('payment too small'), { missing: due - value, received: value, due });
+  const excess = value - due;
 
   if (plan.mode === 'single') {
-    let tx = revealTx(plan.pay, plan.priv, utxo, net);
+    let tx = revealTx(plan.pay, plan.priv, utxos, net);
     const changeAmt = excess - fee(plan.sizes.revealWithChange - plan.sizes.reveal, feeRate);
-    if (refundAddress && changeAmt >= 1000n) tx = revealTx(plan.pay, plan.priv, utxo, net, { address: refundAddress, amount: changeAmt });
+    if (refundAddress && changeAmt >= 1000n) tx = revealTx(plan.pay, plan.priv, utxos, net, { address: refundAddress, amount: changeAmt });
     const t = pack('reveal', tx);
     return { txs: [t], waitAfter: -1, documentId: t.txid + 'i0', refunded: tx.outputsLength > 1 ? changeAmt : 0n, fees: value - POSTAGE - (tx.outputsLength > 1 ? changeAmt : 0n) };
   }
@@ -187,7 +210,7 @@ export function buildTransactions(plan, utxo, { refundAddress } = {}) {
   const changeAmt = excess - fee(plan.sizes.splitWithChange - plan.sizes.split, feeRate);
   const refunded = refundAddress && changeAmt >= 1000n ? changeAmt : 0n;
   if (refunded) outs.push({ address: refundAddress, amount: refunded });
-  const split = keySpendTx(plan.fundPay, plan.fundPriv, utxo, outs, net);
+  const split = keySpendTx(plan.fundPay, plan.fundPriv, utxos, outs, net);
   const reveals = partPays.map((p, i) => revealTx(p, partPrivs[i], { txid: split.id, vout: i, value: plan.partAmts[i] }, net));
   const partIds = reveals.map((t) => t.id + 'i0');
   const idxIns = indexInscription(plan.doc, partIds), idxPriv = derive(plan.secret, 'index'), idxPay = revealPayment(idxIns, idxPriv, net);
@@ -202,6 +225,29 @@ export function buildTransactions(plan, utxo, { refundAddress } = {}) {
   }));
   if (minRate < feeRate * 0.95) throw new Error('internal fee error');
   return { txs, waitAfter: plan.needsConfirmation ? 0 : -1, documentId: idxReveal.id + 'i0', partIds, refunded, fees: value - refunded - POSTAGE * BigInt(parts.length + 1) };
+}
+
+// An underpayment: the highest fee rate (not below `minRate`) at which the money received still covers
+// publishing. Same document, same secret, so the payment address does not change. Returns null if none.
+export function planWithin(plan, value, count = 1, minRate = 1) {
+  value = BigInt(value);
+  const fits = (r) => { const p = createPlan(plan.doc, plan.net, plan.secret, r, plan.sizes); return amountDue(p, count) <= value ? p : null; };
+  if (!fits(minRate)) return null;
+  let lo = minRate, hi = plan.feeRate;
+  for (let i = 0; i < 20; i++) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+  return fits(Math.floor(lo * 100) / 100) || fits(minRate);
+}
+// Returns every payment to the payment address, minus the network fee, to `address`, without publishing.
+export function buildRefund(plan, utxo, address, feeRate) {
+  const { net } = plan, utxos = asList(utxo), value = sum(utxos);
+  if (!isAddress(address, net)) throw new Error('invalid refund address');
+  const make = (amount) => plan.mode === 'single'
+    ? keyLeafTx(plan.pay, plan.priv, utxos, [{ address, amount }], net)
+    : keySpendTx(plan.fundPay, plan.fundPriv, utxos, [{ address, amount }], net);
+  const f = fee(make(value - 1000n).vsize, feeRate), amount = value - f;
+  if (amount < 546n) throw new Error('too little to refund');
+  const tx = make(amount);
+  return { txid: tx.id, hex: hex.encode(tx.extract()), amount, fee: f };
 }
 
 // ---------- reading back ----------
