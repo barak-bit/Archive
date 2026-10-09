@@ -1,0 +1,866 @@
+<title>ארכיב</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;800&family=IBM+Plex+Sans+Hebrew:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow reading column, RTL; a ledger-like header strip, three tabs; data (addresses, hashes, sats) always in mono. */
+:root {
+  --paper: #f2f4f3;
+  --sheet: #fbfcfb;
+  --ink: #15212b;
+  --muted: #5b6872;
+  --rule: #d5dcdc;
+  --accent: #23439e;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3e8f6;
+  --ok: #1d7a4f;
+  --ok-soft: #e1f2e9;
+  --warn: #9a5b00;
+  --warn-soft: #fbf0dc;
+  --bad: #b3261e;
+  --bad-soft: #fbe5e3;
+  --display: "Frank Ruhl Libre", "David", "Times New Roman", serif;
+  --body: "IBM Plex Sans Hebrew", "Arial Hebrew", "Segoe UI", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #10161b; --sheet: #172028; --ink: #e6ecef; --muted: #98a6b0; --rule: #2b3842;
+    --accent: #8fa8ff; --accent-ink: #0d1530; --accent-soft: #1f2a4d;
+    --ok: #6fd3a0; --ok-soft: #133426; --warn: #f0b860; --warn-soft: #3a2a10; --bad: #ff8a80; --bad-soft: #3d1715;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #10161b; --sheet: #172028; --ink: #e6ecef; --muted: #98a6b0; --rule: #2b3842;
+  --accent: #8fa8ff; --accent-ink: #0d1530; --accent-soft: #1f2a4d;
+  --ok: #6fd3a0; --ok-soft: #133426; --warn: #f0b860; --warn-soft: #3a2a10; --bad: #ff8a80; --bad-soft: #3d1715;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6; direction: rtl; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 0 64px; }
+.mono, code { font-family: var(--mono); font-size: 0.86em; direction: ltr; unicode-bidi: isolate; word-break: break-all; font-variant-numeric: tabular-nums; }
+
+header.top { padding-block: 28px 18px; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; border-bottom: 2px solid var(--ink); }
+.brand h1 { font-family: var(--display); font-weight: 800; font-size: clamp(2.4rem, 7vw, 3.4rem); line-height: 1; margin: 0; letter-spacing: -0.01em; }
+.brand p { margin: 8px 0 0; color: var(--muted); max-width: 46ch; text-wrap: balance; }
+.netline { display: grid; gap: 4px; font-size: 0.8rem; color: var(--muted); text-align: left; }
+.netline .mono { color: var(--ink); }
+.pill { justify-self: start; display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
+.pill.test { background: var(--warn-soft); color: var(--warn); }
+.pill.main { background: var(--ok-soft); color: var(--ok); }
+
+nav.tabs { display: flex; gap: 4px; margin-block: 20px 24px; border-bottom: 1px solid var(--rule); overflow-x: auto; }
+nav.tabs button { font: inherit; font-weight: 600; background: none; border: 0; color: var(--muted); padding: 10px 14px; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+nav.tabs button:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.banner { padding: 10px 14px; border-radius: var(--r); font-size: 0.92rem; margin-bottom: 18px; }
+.banner.warn { background: var(--warn-soft); color: var(--ink); border-inline-start: 4px solid var(--warn); }
+.banner.info { background: var(--accent-soft); color: var(--ink); border-inline-start: 4px solid var(--accent); }
+
+section.step { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r); padding: 18px 18px 20px; margin-bottom: 14px; }
+section.step.locked { opacity: 0.55; }
+.step h2 { font-family: var(--display); font-weight: 800; font-size: 1.35rem; margin: 0 0 4px; display: flex; gap: 10px; align-items: baseline; }
+.step h2 .n { font-family: var(--mono); font-size: 0.8rem; font-weight: 500; color: var(--accent); border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; }
+.step .lead { color: var(--muted); margin: 0 0 14px; font-size: 0.95rem; }
+
+label.f { display: grid; gap: 6px; font-weight: 600; font-size: 0.92rem; margin-bottom: 14px; }
+label.f small { font-weight: 400; color: var(--muted); }
+input[type="text"], input[type="number"], textarea, select { font: inherit; font-weight: 400; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r); padding: 9px 11px; width: 100%; min-width: 0; }
+textarea { min-height: 150px; resize: vertical; line-height: 1.55; }
+textarea.mono, input.mono { font-family: var(--mono); font-size: 0.84rem; }
+.drop { border: 1.5px dashed var(--rule); border-radius: var(--r); padding: 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.drop .hint { color: var(--muted); font-size: 0.9rem; }
+
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+
+button.btn { font: inherit; font-weight: 600; border-radius: var(--r); padding: 9px 16px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+button.btn.ghost { background: transparent; color: var(--accent); }
+button.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+dl.ledger { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0 0 14px; font-size: 0.93rem; }
+dl.ledger dt { color: var(--muted); }
+dl.ledger dd { margin: 0; min-width: 0; }
+.big { font-family: var(--mono); font-size: 1.25rem; font-weight: 500; direction: ltr; unicode-bidi: isolate; }
+
+.checks { display: grid; gap: 8px; margin-bottom: 16px; }
+.checks label { display: flex; gap: 10px; align-items: flex-start; font-size: 0.93rem; }
+.checks input { margin-top: 5px; flex: none; }
+
+.copybox { display: flex; gap: 8px; align-items: center; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r); padding: 8px 10px; margin-bottom: 10px; }
+.copybox .mono { flex: 1; min-width: 0; }
+
+.status { display: flex; gap: 10px; align-items: center; font-size: 0.93rem; padding: 10px 12px; border-radius: var(--r); background: var(--paper); margin-block: 10px; }
+.status.ok { background: var(--ok-soft); }
+.status.bad { background: var(--bad-soft); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+.status.ok .dot { background: var(--ok); }
+.status.bad .dot { background: var(--bad); }
+@media (prefers-reduced-motion: no-preference) { .dot.pulse { animation: pulse 1.4s ease-in-out infinite; } @keyframes pulse { 50% { opacity: 0.3; } } }
+
+details.manual { margin-top: 10px; border-top: 1px solid var(--rule); padding-top: 10px; }
+details.manual summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.92rem; }
+
+.list { display: grid; gap: 0; border-top: 1px solid var(--rule); }
+.item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; padding: 12px 2px; border-bottom: 1px solid var(--rule); cursor: pointer; background: none; border-inline: 0; border-top: 0; text-align: start; font: inherit; color: inherit; }
+.item:hover { background: var(--sheet); }
+.item .t { font-weight: 600; }
+.item .meta { color: var(--muted); font-size: 0.82rem; grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.ext { font-size: 0.75rem; font-weight: 600; color: var(--warn); background: var(--warn-soft); border-radius: 4px; padding: 0 6px; }
+.toggle { display: flex; gap: 8px; align-items: center; font-size: 0.88rem; color: var(--muted); margin: -4px 0 12px; }
+.tag { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); border: 1px solid var(--rule); border-radius: 4px; padding: 0 6px; align-self: start; direction: ltr; }
+.example { font-size: 0.75rem; font-weight: 600; color: var(--warn); }
+
+.viewer { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r); padding: 16px; margin-top: 14px; }
+.viewer pre { white-space: pre-wrap; word-break: break-word; font-family: var(--body); font-size: 0.95rem; max-height: 420px; overflow: auto; background: var(--paper); padding: 12px; border-radius: var(--r); margin: 10px 0 0; }
+.viewer iframe { width: 100%; height: 480px; border: 1px solid var(--rule); border-radius: var(--r); background: #fff; margin-top: 10px; }
+
+.result { font-size: 1.05rem; font-weight: 600; padding: 14px; border-radius: var(--r); margin-top: 12px; }
+.result.ok { background: var(--ok-soft); color: var(--ok); }
+.result.bad { background: var(--bad-soft); color: var(--bad); }
+
+footer.foot { margin-top: 36px; color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--rule); padding-top: 14px; display: grid; gap: 6px; }
+a { color: var(--accent); }
+.err { color: var(--bad); font-size: 0.9rem; min-height: 1.2em; margin: 0 0 8px; }
+.txlist { display: grid; gap: 0; margin: 8px 0 12px; border-top: 1px solid var(--rule); font-size: 0.88rem; }
+.txrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 7px 2px; border-bottom: 1px solid var(--rule); align-items: center; }
+.txrow .nm { font-weight: 600; }
+.txrow .st { font-size: 0.8rem; color: var(--muted); }
+.txrow .st.ok { color: var(--ok); }
+.txrow .st.bad { color: var(--bad); }
+.txrow .id { grid-column: 1 / -1; color: var(--muted); font-size: 0.78rem; }
+.txrow textarea { grid-column: 1 / -1; min-height: 56px; font-size: 0.74rem; }
+.parts { font-size: 0.75rem; font-weight: 600; color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 0 6px; }
+.seal { display: inline-flex; gap: 6px; align-items: center; font-size: 0.85rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; margin-top: 8px; }
+.seal.ok { background: var(--ok-soft); color: var(--ok); }
+.seal.bad { background: var(--bad-soft); color: var(--bad); }
+.seal.wait { background: var(--paper); color: var(--muted); }
+.filebtn { display: inline-block; border: 1px solid var(--accent); border-radius: var(--r); padding: 4px 10px; cursor: pointer; color: var(--accent); font-weight: 600; font-size: .85rem; }
+.filebtn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>ארכיב</h1>
+      <p>ארכיון ציבורי על הבלוקצ'יין של ביטקוין. מה שנרשם כאן נשאר קריא לכל אחד, לתמיד, גם אם האתר הזה ייסגר.</p>
+    </div>
+    <div class="netline">
+      <span id="netPill" class="pill test">רשת בדיקה</span>
+      <span>כתובת הארכיון</span>
+      <span class="mono" id="archiveAddr"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-register" aria-selected="true" data-tab="register">רישום מסמך</button>
+    <button role="tab" id="tab-archive" aria-selected="false" data-tab="archive">הארכיון</button>
+    <button role="tab" id="tab-verify" aria-selected="false" data-tab="verify">אימות מסמך</button>
+  </nav>
+
+  <div id="offlineBanner" class="banner info" hidden>
+    אין כאן גישה לרשת הביטקוין, ולכן העמוד עובד במצב ידני: את התשלום מזינים בעצמכם, ואת העסקאות מעתיקים לשידור. כשהאתר מותקן בדומיין שלכם, הכול קורה אוטומטית.
+  </div>
+  <div id="testBanner" class="banner warn">
+    האתר מחובר לרשת הבדיקה של ביטקוין. המטבעות כאן חסרי ערך, ואפשר לקבל אותם בחינם מ-faucet. אל תשלחו לכתובות האלה ביטקוין אמיתי.
+  </div>
+
+  <!-- REGISTER -->
+  <div id="panel-register" role="tabpanel">
+    <section class="step" id="s1">
+      <h2><span class="n">1</span>המסמך</h2>
+      <p class="lead">טקסט או כל קובץ, עד כ-7MB. טקסט נדחס אוטומטית, ומסמך גדול מפוצל לחלקים בתשלום אחד.</p>
+      <div class="drop" id="drop">
+        <span class="hint" id="fileHint">גררו לכאן קובץ, או כתבו טקסט למטה</span>
+        <div class="row">
+          <button class="btn ghost small" id="clearFile" type="button" hidden>חזרה לטקסט</button>
+          <label class="filebtn">בחירת קובץ<input type="file" id="fileInput" hidden></label>
+        </div>
+      </div>
+      <label class="f">כותרת <small>תופיע בארכיון ותירשם יחד עם המסמך</small>
+        <input type="text" id="title" value="הסכם שיתוף פעולה – דוגמה">
+      </label>
+      <label class="f">תקציר <small>לא חובה. עד 1,500 תווים. מופיע בדף הפרסום הציבורי ועוזר למצוא את המסמך בחיפוש.</small>
+        <textarea id="abstract" maxlength="1500" style="min-height:70px"></textarea>
+      </label>
+      <label class="f">מילות מפתח <small>לא חובה. מופרדות בפסיקים.</small>
+        <input type="text" id="keywords" maxlength="300">
+      </label>
+      <label class="f" id="textWrap">טקסט <span class="example">טקסט לדוגמה, החליפו בשלכם</span>
+        <textarea id="text">הסכם שיתוף פעולה (דוגמה)
+
+1. הצדדים מסכימים לשתף פעולה בפרויקט הארכיון הציבורי.
+2. כל צד אחראי לתוכן שהוא מפרסם.
+3. ההסכם נכנס לתוקף במועד רישומו.</textarea>
+      </label>
+      <dl class="ledger">
+        <dt>גודל</dt><dd class="mono" id="sizeOut">–</dd>
+        <dt>נרשם בפועל</dt><dd id="storedOut">–</dd>
+        <dt>סוג</dt><dd class="mono" id="typeOut">–</dd>
+        <dt>טביעת אצבע (SHA-256)</dt><dd class="mono" id="hashOut">–</dd>
+      </dl>
+      <div class="grid2">
+        <label class="f">עמלה (sat/vB) <small id="feeHint">ממתין לנתוני הרשת</small>
+          <input type="number" id="feeRate" min="1" step="0.1" value="2">
+        </label>
+        <div>
+          <div style="font-weight:600;font-size:.92rem;margin-bottom:6px">עלות משוערת</div>
+          <div class="big" id="costOut">–</div>
+          <div style="color:var(--muted);font-size:.85rem" id="costSub"></div>
+        </div>
+      </div>
+      <div class="banner info" id="multiNote" hidden></div>
+      <p class="err" id="err1"></p>
+    </section>
+
+    <section class="step" id="s2">
+      <h2><span class="n">2</span>אישור המפרסם</h2>
+      <p class="lead">אתם מפרסמים את המסמך בעצמכם. האתר רק מכין את העסקאות בדפדפן שלכם.</p>
+      <div class="checks">
+        <label><input type="checkbox" class="decl" id="d1"> המסמך שלי, או שיש לי זכות לפרסם אותו, ואני האחראי לתוכנו.</label>
+        <label><input type="checkbox" class="decl" id="d2"> אין בו פרטים אישיים של אחרים (תעודות זהות, כתובות, טלפונים) ללא הסכמתם.</label>
+        <label><input type="checkbox" class="decl" id="d3"> אין בו לשון הרע, הסתה או תוכן בלתי חוקי.</label>
+        <label><input type="checkbox" class="decl" id="d4"> הבנתי שהמסמך יהיה ציבורי לתמיד, ושאיש, כולל מפעילי האתר, לא יוכל למחוק או לשנות אותו.</label>
+      </div>
+      <label class="f">כתובת להחזר עודף <small>לא חובה. אם תשלמו יותר מהנדרש, העודף יוחזר לכאן. אחרת הוא יגיע לכורים כעמלה.</small>
+        <input type="text" id="refund" class="mono" placeholder="tb1q…">
+      </label>
+      <button class="btn" id="prepareBtn" disabled>הכנת הרישום</button>
+      <p class="err" id="err2"></p>
+    </section>
+
+    <section class="step locked" id="s3">
+      <h2><span class="n">3</span>תשלום</h2>
+      <p class="lead">שלחו את הסכום לכתובת התשלום הזמנית הזו, מכל ארנק ביטקוין. תשלום אחד מכסה את כל העסקאות.</p>
+      <div id="payArea" hidden>
+        <dl class="ledger">
+          <dt>סכום</dt><dd><span class="big" id="payAmount"></span></dd>
+        </dl>
+        <div class="copybox"><span class="mono" id="payAddr"></span><button class="btn ghost small" data-copy="payAddr">העתקה</button></div>
+        <div class="row" style="margin-bottom:10px">
+          <a id="payLink" href="#">פתיחה בארנק</a>
+          <button class="btn ghost small" id="unisatBtn" hidden>תשלום עם UniSat</button>
+          <button class="btn small" id="cardBtn" hidden>תשלום בכרטיס אשראי</button>
+        </div>
+        <p class="err" id="cardErr"></p>
+        <div class="banner warn" style="margin-bottom:10px">
+          <strong>שמרו את קובץ השחזור לפני התשלום.</strong> אם הדף ייסגר באמצע, רק הקובץ הזה יאפשר להשלים את הרישום.
+          <div class="row" style="margin-top:8px">
+            <button class="btn small" id="saveRecovery">שמירת קובץ</button>
+            <button class="btn ghost small" id="copyRecovery">העתקת התוכן</button>
+          </div>
+        </div>
+        <div class="status" id="payStatus"><span class="dot pulse"></span><span>ממתין לתשלום…</span></div>
+        <details class="manual" id="manualPay">
+          <summary>שילמתי, אבל התשלום לא זוהה</summary>
+          <div class="grid2" style="margin-top:10px">
+            <label class="f">מזהה העסקה (txid)<input type="text" id="mTxid" class="mono"></label>
+            <label class="f">מספר פלט (vout)<input type="number" id="mVout" min="0" value="0"></label>
+            <label class="f">סכום שהתקבל (sats)<input type="number" id="mValue" min="0"></label>
+          </div>
+          <button class="btn ghost small" id="manualPayBtn">המשך עם הפרטים האלה</button>
+        </details>
+      </div>
+    </section>
+
+    <section class="step locked" id="s4">
+      <h2><span class="n">4</span>פרסום</h2>
+      <p class="lead">העסקאות חושפות את המסמך ושולחות אותו לכתובת הארכיון, שממנה אי אפשר להזיז דבר.</p>
+      <div id="revealArea" hidden>
+        <div class="status" id="revealStatus"><span class="dot pulse"></span><span>מכין את העסקאות…</span></div>
+        <div id="manualNote" hidden>
+          <p style="font-size:.93rem;margin:6px 0">שדרו את העסקאות לפי הסדר בעמוד השידור של <a id="pushLink" href="#" target="_blank" rel="noopener">mempool.space</a>.<span id="manualWait"></span></p>
+        </div>
+        <div class="txlist" id="txList"></div>
+        <div class="row"><button class="btn ghost small" id="retryBtn" hidden>ניסיון חוזר</button></div>
+        <div id="doneArea" hidden>
+          <dl class="ledger">
+            <dt>מזהה המסמך</dt><dd class="mono" id="doneId"></dd>
+            <dt>עמלות ששולמו</dt><dd class="mono" id="doneFee"></dd>
+          </dl>
+          <div class="row"><a id="doneLink" href="#" target="_blank" rel="noopener">צפייה ב-explorer</a></div>
+        </div>
+      </div>
+    </section>
+
+    <details class="manual" style="margin-top:6px" id="recoverBox">
+      <summary>המשך רישום מקובץ שחזור</summary>
+      <label class="f" style="margin-top:10px">הדביקו את תוכן קובץ השחזור
+        <textarea id="recoveryIn" class="mono" style="min-height:80px"></textarea>
+      </label>
+      <div class="row"><label class="filebtn">טעינת קובץ<input type="file" id="recoveryFile" hidden accept=".json,application/json"></label><button class="btn small" id="recoverBtn">המשך</button></div>
+      <p class="err" id="errRec"></p>
+    </details>
+  </div>
+
+  <!-- ARCHIVE -->
+  <div id="panel-archive" role="tabpanel" hidden>
+    <div class="row" style="margin-bottom:14px">
+      <input type="text" id="search" placeholder="חיפוש בכותרות ובתוכן" style="flex:1;min-width:0">
+      <button class="btn ghost" id="reloadArchive">רענון</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="showExternal"> הצגת רישומים חיצוניים <span id="extCount"></span></label>
+    <div class="status" id="archStatus"><span class="dot pulse"></span><span>טוען את הארכיון מהבלוקצ'יין…</span></div>
+    <div class="list" id="archList"></div>
+    <div class="row" style="margin-top:12px"><button class="btn ghost small" id="moreBtn" hidden>טעינת רישומים ישנים יותר</button></div>
+    <div class="viewer" id="viewer" hidden></div>
+  </div>
+
+  <!-- VERIFY -->
+  <div id="panel-verify" role="tabpanel" hidden>
+    <section class="step">
+      <h2>האם המסמך הזה רשום?</h2>
+      <p class="lead">בחרו את הקובץ שבידיכם. הבדיקה נעשית בדפדפן, והקובץ לא נשלח לשום מקום.</p>
+      <div class="drop" id="vDrop">
+        <span class="hint" id="vHint">גררו לכאן קובץ</span>
+        <label class="filebtn">בחירת קובץ<input type="file" id="vFile" hidden></label>
+      </div>
+      <label class="f">או הדביקו טקסט<textarea id="vText" style="min-height:90px"></textarea></label>
+      <label class="f">מזהה מסמך לבדיקה <small>לא חובה. בלי מזהה, הבדיקה עוברת על כל הארכיון.</small>
+        <input type="text" id="vTxid" class="mono" placeholder="txid או מזהה שמסתיים ב-i0">
+      </label>
+      <button class="btn" id="verifyBtn">בדיקה</button>
+      <dl class="ledger" style="margin-top:14px"><dt>טביעת האצבע של הקובץ</dt><dd class="mono" id="vHash">–</dd></dl>
+      <div id="vResult"></div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <span>האתר הוא כלי תוכנה. כל מסמך נרשם על ידי המפרסם, מהארנק שלו ובאחריותו.</span>
+    <span>דיווח על תוכן פוגעני: <span class="mono" id="reportEmail"></span>. תוכן שיימצא פוגעני יוסר מהתצוגה באתר. מהבלוקצ'יין עצמו אי אפשר להסיר אותו.</span>
+  </footer>
+</div>
+
+<script>/*ENGINE*/</script>
+<script>
+// Settings come from config.json and are injected by scripts/build.mjs.
+const CONFIG = /*CONFIG*/{ network: 'testnet4', reportEmail: '', hiddenTxids: [], publicPages: false, cardPayment: { label: '', urlTemplate: '', signEndpoint: '' } }/*END*/;
+
+const E = Engine;
+const NET = E.NETWORKS[CONFIG.network];
+const ARCHIVE = E.archiveAddress(NET.btc);
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const DECOMPRESS_CAP = 64 * 1024 * 1024;
+let online = null;
+const S = { doc: null, sizes: null, plan: null, built: null, usd: null, poll: null, docToken: 0, recovery: '', refund: '' };
+
+// ---------- network ----------
+async function api(path, opts = {}) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch(NET.api + path, { ...opts, signal: ctl.signal });
+    const txt = await r.text();
+    setOnline(true);
+    if (!r.ok) throw Object.assign(new Error(txt || ('HTTP ' + r.status)), { http: r.status });
+    try { return JSON.parse(txt); } catch { return txt; }
+  } catch (e) { if (!e.http) setOnline(false); throw e; }
+  finally { clearTimeout(t); }
+}
+function setOnline(v) { online = v; $('offlineBanner').hidden = v !== false; }
+const FAST = !!window.__archivTestFast; // test hook: shortens waits
+const sleep = (ms) => new Promise((r) => setTimeout(r, FAST ? Math.min(ms, 200) : ms));
+
+// ---------- helpers ----------
+const ltr = (t) => '\u2066' + t + '\u2069'; // keeps numbers with units in order inside Hebrew text
+const fmtBytes = (n) => ltr(n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB' : (n / 1048576).toFixed(2) + ' MB');
+const fmtSats = (s) => ltr(Number(s).toLocaleString('en-US') + ' sats');
+const btcStr = (s) => (Number(s) / 1e8).toFixed(8);
+const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function copy(text, btn) {
+  const done = () => { if (btn) { const o = btn.textContent; btn.textContent = 'הועתק'; setTimeout(() => btn.textContent = o, 1400); } };
+  const fb = () => { const ta = document.createElement('textarea'); ta.value = text; document.body.append(ta); ta.select(); try { document.execCommand('copy'); done(); } catch {} ta.remove(); };
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, fb); else fb();
+}
+function save(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+function load(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function setStatus(el, kind, text) { el.className = 'status' + (kind ? ' ' + kind : ''); el.querySelector('.dot').className = 'dot' + (kind ? '' : ' pulse'); el.lastElementChild.textContent = text; }
+function guessType(file) {
+  if (file.type) return /^text\//.test(file.type) && !/charset/.test(file.type) ? file.type + ';charset=utf-8' : file.type;
+  const ext = file.name.split('.').pop().toLowerCase();
+  return { pdf: 'application/pdf', txt: 'text/plain;charset=utf-8', md: 'text/markdown;charset=utf-8', html: 'text/html;charset=utf-8', json: 'application/json' }[ext] || 'application/octet-stream';
+}
+async function gzip(bytes) { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()); }
+async function gunzip(bytes) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const chunks = []; let n = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > DECOMPRESS_CAP) { reader.cancel(); throw new Error('too large'); } chunks.push(value); }
+  const out = new Uint8Array(n); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out;
+}
+const decodeBody = (body, encoding) => encoding === 'gzip' ? gunzip(body) : Promise.resolve(body);
+function safeType(type) {
+  const t = String(type || '').split(';')[0].trim().toLowerCase();
+  if (t === 'application/pdf') return 'application/pdf';
+  if (/^image\/(png|jpeg|gif|webp|avif)$/.test(t)) return t;
+  if (/^text\/(plain|markdown|csv)$/.test(t) || t === 'application/json') return 'text/plain;charset=utf-8';
+  return '';
+}
+const fmtDate = (t) => t ? new Date(t * 1000).toLocaleString('he-IL') : 'ממתין לאישור בבלוק';
+
+// ---------- tabs ----------
+document.querySelectorAll('nav.tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+function showTab(name) {
+  document.querySelectorAll('nav.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
+  ['register', 'archive', 'verify'].forEach((n) => $('panel-' + n).hidden = n !== name);
+  if (name === 'archive' && !archive.loaded) loadArchive();
+  try { history.replaceState(null, '', '#' + name); } catch {}
+}
+
+// ---------- step 1: document ----------
+let src = { bytes: null, type: 'text/plain;charset=utf-8', file: '' };
+async function prepareDoc() {
+  const token = ++S.docToken;
+  resetFlow();
+  const { bytes, type, file } = src;
+  $('err1').textContent = ''; $('multiNote').hidden = true;
+  if (!bytes || !bytes.length) { S.doc = null; showDocInfo(); return; }
+  $('sizeOut').textContent = fmtBytes(bytes.length); $('typeOut').textContent = type;
+  $('hashOut').textContent = E.sha256Hex(bytes);
+  $('storedOut').textContent = 'מחשב…'; $('costOut').textContent = '…'; $('costSub').textContent = '';
+  let stored = bytes, encoding = '';
+  if (window.CompressionStream && !/^(image|video|audio)\/|zip|gzip/.test(type)) {
+    try { const z = await gzip(bytes); if (z.length < bytes.length * 0.9) { stored = z; encoding = 'gzip'; } } catch {}
+  }
+  if (token !== S.docToken) return;
+  if (stored.length > E.MAX_DOC) {
+    S.doc = null; $('storedOut').textContent = fmtBytes(stored.length);
+    $('err1').textContent = `המסמך גדול מדי (${fmtBytes(stored.length)} גם אחרי דחיסה). המגבלה היא ${fmtBytes(E.MAX_DOC)}. נסו לייצא PDF קטן יותר או לשמור רק את הטקסט.`;
+    $('costOut').textContent = '–'; return;
+  }
+  S.doc = E.makeDoc({ stored, contentEncoding: encoding, contentType: type, title: $('title').value.trim(), file, sha256: E.sha256Hex(bytes), size: bytes.length,
+    abstract: $('abstract').value.trim(), keywords: $('keywords').value.trim() });
+  await sleep(0);
+  S.sizes = E.measure(S.doc, NET.btc);
+  if (token !== S.docToken) return;
+  showDocInfo(); updateCost();
+}
+function showDocInfo() {
+  const d = S.doc;
+  if (!d) { ['sizeOut', 'storedOut', 'typeOut', 'hashOut', 'costOut'].forEach((i) => $(i).textContent = '–'); $('costSub').textContent = ''; return; }
+  const n = E.partCount(d);
+  $('storedOut').textContent = (d.contentEncoding ? `${fmtBytes(d.stored.length)} אחרי דחיסה` : fmtBytes(d.stored.length)) + (n > 1 ? ` · ${n} חלקים` : '');
+  if (n > 1) {
+    $('multiNote').hidden = false;
+    $('multiNote').textContent = `המסמך יפוצל ל-${n} חלקים ויירשם כמסמך אחד, בתשלום אחד. אחרי התשלום צריך להמתין לאישור בלוק אחד (בדרך כלל 10–30 דקות) לפני פרסום החלקים. אפשר לסגור את הדף בזמן ההמתנה ולהמשיך אחר כך עם קובץ השחזור.`;
+  }
+}
+let typingTimer;
+$('text').addEventListener('input', () => { if (src.file) return; clearTimeout(typingTimer); typingTimer = setTimeout(fromText, 300); });
+function fromText() { src = { bytes: enc.encode($('text').value), type: 'text/plain;charset=utf-8', file: '' }; prepareDoc(); }
+async function takeFile(file) {
+  $('fileHint').textContent = `${file.name} · ${fmtBytes(file.size)}`;
+  $('textWrap').hidden = true; $('clearFile').hidden = false;
+  if (!$('title').value.trim() || $('title').value.includes('דוגמה')) $('title').value = file.name.replace(/\.[^.]+$/, '');
+  src = { bytes: new Uint8Array(await file.arrayBuffer()), type: guessType(file), file: file.name };
+  prepareDoc();
+}
+$('clearFile').addEventListener('click', () => { $('textWrap').hidden = false; $('clearFile').hidden = true; $('fileHint').textContent = 'גררו לכאן קובץ, או כתבו טקסט למטה'; $('fileInput').value = ''; fromText(); });
+$('fileInput').addEventListener('change', (e) => e.target.files[0] && takeFile(e.target.files[0]));
+dropZone($('drop'), takeFile);
+function dropZone(el, fn) {
+  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
+  el.addEventListener('dragleave', () => el.classList.remove('over'));
+  el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) fn(f); });
+}
+$('feeRate').addEventListener('input', () => { resetFlow(); updateCost(); });
+let titleTimer; ['title', 'abstract', 'keywords'].forEach((id) => $(id).addEventListener('input', () => { clearTimeout(titleTimer); titleTimer = setTimeout(prepareDoc, 300); }));
+
+function updateCost() {
+  const rate = Number($('feeRate').value);
+  if (!S.doc || !S.sizes || !(rate > 0)) { $('costOut').textContent = '–'; $('costSub').textContent = ''; return; }
+  const p = E.createPlan(S.doc, NET.btc, new Uint8Array(32).fill(9), rate, S.sizes);
+  $('costOut').textContent = fmtSats(p.total);
+  const usd = S.usd ? ` · כ-$${(Number(p.total) / 1e8 * S.usd).toFixed(2)}` : '';
+  $('costSub').textContent = `${ltr(btcStr(p.total) + ' BTC')} · ${p.txCount === 1 ? 'עסקה אחת' : p.txCount + ' עסקאות'} · ${ltr(p.vsize.toLocaleString('en-US') + ' vB')}${usd}`;
+}
+async function loadFees() {
+  try {
+    const f = await api('/v1/fees/recommended');
+    $('feeRate').value = Math.max(1, f.halfHourFee);
+    $('feeHint').textContent = `מומלץ עכשיו: ${f.halfHourFee} (חצי שעה), ${f.fastestFee} (בלוק הבא)`;
+  } catch { $('feeHint').textContent = 'אין נתוני רשת; הזינו עמלה בעצמכם'; }
+  try { if (CONFIG.network === 'mainnet') { const p = await api('/v1/prices'); S.usd = p.USD; } } catch {}
+  updateCost();
+}
+
+// ---------- step 2: declarations ----------
+document.querySelectorAll('.decl').forEach((c) => c.addEventListener('change', refreshPrepare));
+function refreshPrepare() { $('prepareBtn').disabled = ![...document.querySelectorAll('.decl')].every((c) => c.checked); }
+$('prepareBtn').addEventListener('click', () => {
+  $('err2').textContent = '';
+  try {
+    if (!S.doc || !S.sizes) throw new Error('אין מסמך לרישום, או שהוא עדיין בעיבוד.');
+    if (!$('title').value.trim()) throw new Error('חסרה כותרת.');
+    const rate = Number($('feeRate').value);
+    if (!(rate >= 0.1)) throw new Error('העמלה חייבת להיות מספר חיובי.');
+    const refund = $('refund').value.trim();
+    if (refund && !E.isAddress(refund, NET.btc)) throw new Error('כתובת ההחזר אינה תקינה לרשת הזו.');
+    startPayment(E.createPlan(S.doc, NET.btc, E.newSecret(), rate, S.sizes), refund);
+  } catch (e) { $('err2').textContent = e.message; }
+});
+
+// ---------- step 3: payment ----------
+function startPayment(plan, refund) {
+  S.plan = plan; S.refund = refund || ''; S.built = null;
+  S.recovery = E.exportRecovery(plan, CONFIG.network, S.refund);
+  save('archiv.pending', S.recovery);
+  $('s3').classList.remove('locked'); $('payArea').hidden = false;
+  $('payAmount').textContent = `${fmtSats(plan.total)} (${btcStr(plan.total)} BTC)`;
+  $('payAddr').textContent = plan.payAddress;
+  $('payLink').href = `bitcoin:${plan.payAddress}?amount=${btcStr(plan.total)}`;
+  $('mValue').value = Number(plan.total);
+  $('unisatBtn').hidden = !window.unisat;
+  $('cardBtn').hidden = !(CONFIG.cardPayment.urlTemplate && CONFIG.network === 'mainnet');
+  if (!$('cardBtn').hidden) $('cardBtn').textContent = `תשלום בכרטיס אשראי (${CONFIG.cardPayment.label})`;
+  setStatus($('payStatus'), '', 'ממתין לתשלום…');
+  $('s3').scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
+  pollPayment();
+}
+function resetFlow() {
+  if (!S.plan) return;
+  clearTimeout(S.poll); S.plan = null; S.built = null;
+  $('payArea').hidden = true; $('revealArea').hidden = true;
+  $('s3').classList.add('locked'); $('s4').classList.add('locked');
+}
+// Finds the payment even after it was spent (needed when resuming), by reading the address history.
+async function findPayment(addr) {
+  const txs = await api(`/address/${addr}/txs`);
+  let best = null;
+  for (const tx of txs) tx.vout.forEach((o, i) => { if (o.scriptpubkey_address === addr && (!best || o.value > best.value)) best = { txid: tx.txid, vout: i, value: o.value, confirmed: tx.status.confirmed }; });
+  return best;
+}
+async function pollPayment() {
+  clearTimeout(S.poll);
+  const plan = S.plan; if (!plan) return;
+  try {
+    const u = await findPayment(plan.payAddress);
+    if (plan !== S.plan) return;
+    if (u) {
+      if (BigInt(u.value) < plan.total) setStatus($('payStatus'), 'bad', `התקבלו ${fmtSats(u.value)}, פחות מ-${fmtSats(plan.total)}. שלחו את ההפרש לאותה כתובת; העסקה תיבנה מהתשלום הגדול ביותר, ולכן עדיף לבטל ולהתחיל מחדש עם הסכום המלא.`);
+      else { setStatus($('payStatus'), 'ok', `התשלום התקבל (${fmtSats(u.value)}).`); return publish(u); }
+    } else setStatus($('payStatus'), '', 'ממתין לתשלום… הבדיקה מתבצעת כל 10 שניות.');
+  } catch {
+    if (online === false) { setStatus($('payStatus'), 'bad', 'אין גישה לרשת. אחרי התשלום, הזינו את פרטי העסקה ידנית למטה.'); $('manualPay').open = true; return; }
+  }
+  S.poll = setTimeout(pollPayment, FAST ? 200 : 10000);
+}
+$('manualPayBtn').addEventListener('click', () => {
+  const txid = $('mTxid').value.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(txid)) return setStatus($('payStatus'), 'bad', 'מזהה העסקה צריך להיות 64 תווים הקסדצימליים.');
+  clearTimeout(S.poll);
+  publish({ txid, vout: Number($('mVout').value), value: Number($('mValue').value) });
+});
+$('unisatBtn').addEventListener('click', async () => {
+  try {
+    await window.unisat.requestAccounts();
+    const txid = await window.unisat.sendBitcoin(S.plan.payAddress, Number(S.plan.total), { feeRate: Math.max(1, Math.ceil(S.plan.feeRate)) });
+    setStatus($('payStatus'), '', `התשלום נשלח (${txid.slice(0, 10)}…). ממתין לזיהוי ברשת…`);
+  } catch (e) { setStatus($('payStatus'), 'bad', 'UniSat: ' + (e.message || 'התשלום בוטל')); }
+});
+$('cardBtn').addEventListener('click', async () => {
+  $('cardErr').textContent = '';
+  const c = CONFIG.cardPayment;
+  // On-ramps add their own fees and may enforce a minimum; ask for a little extra so network fees are covered.
+  const sats = S.plan.total + S.plan.total / 50n + 1000n;
+  let url = c.urlTemplate.replace('{address}', encodeURIComponent(S.plan.payAddress)).replace('{btc}', btcStr(sats)).replace('{sats}', String(sats));
+  const win = window.open('about:blank', '_blank');
+  try {
+    if (c.signEndpoint) { const r = await fetch(c.signEndpoint + '?url=' + encodeURIComponent(url)); url = (await r.json()).url; }
+    if (win) win.location = url; else location.href = url;
+    setStatus($('payStatus'), '', 'אחרי התשלום בכרטיס, הביטקוין יגיע לכתובת התשלום. זה עשוי לקחת כמה דקות.');
+  } catch { if (win) win.close(); $('cardErr').textContent = 'לא הצלחנו לפתוח את דף התשלום. נסו שוב או שלמו מארנק.'; }
+});
+$('saveRecovery').addEventListener('click', () => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([S.recovery], { type: 'application/json' }));
+  a.download = `archiv-recovery-${S.plan.payAddress.slice(-8)}.json`; document.body.append(a); a.click(); a.remove();
+});
+$('copyRecovery').addEventListener('click', (e) => copy(S.recovery, e.target));
+
+// ---------- step 4: publish ----------
+const TX_LABEL = (t, n) => t.name === 'split' ? 'חלוקת התשלום' : t.name === 'reveal' ? 'המסמך' : t.name === 'index-commit' ? 'הכנת האינדקס' : t.name === 'index' ? 'אינדקס המסמך' : t.name.replace('part', 'חלק') + ` מתוך ${n}`;
+function renderTxList(manual) {
+  const list = $('txList'); list.textContent = '';
+  const n = S.built.txs.filter((t) => t.name.startsWith('part')).length;
+  S.built.txs.forEach((t, i) => {
+    const row = document.createElement('div'); row.className = 'txrow'; row.id = 'tx-' + i;
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = `${i + 1}. ${TX_LABEL(t, n)}`;
+    const st = document.createElement('span'); st.className = 'st'; st.textContent = 'ממתין';
+    const id = document.createElement('a'); id.className = 'id mono'; id.href = NET.explorer + '/tx/' + t.txid; id.target = '_blank'; id.rel = 'noopener'; id.textContent = t.txid;
+    row.append(nm, st, id);
+    if (manual) {
+      const ta = document.createElement('textarea'); ta.className = 'mono'; ta.readOnly = true; ta.value = t.hex; ta.id = 'raw-' + i;
+      const b = document.createElement('button'); b.className = 'btn ghost small'; b.type = 'button'; b.textContent = 'העתקת העסקה'; b.dataset.copyVal = 'raw-' + i;
+      row.append(ta, b);
+    }
+    list.append(row);
+  });
+}
+function markTx(i, kind, text) { const st = $('tx-' + i)?.querySelector('.st'); if (st) { st.className = 'st ' + (kind || ''); st.textContent = text; } }
+async function txStatus(txid) { try { return await api(`/tx/${txid}/status`); } catch (e) { if (e.http === 404 || e.http === 400) return null; throw e; } }
+
+async function publish(utxo) {
+  $('s4').classList.remove('locked'); $('revealArea').hidden = false; $('doneArea').hidden = true; $('retryBtn').hidden = true; $('manualNote').hidden = true;
+  const st = $('revealStatus');
+  try { S.built = E.buildTransactions(S.plan, utxo, { refundAddress: S.refund || undefined }); }
+  catch (e) {
+    return setStatus(st, 'bad', /too small/.test(e.message) ? `הסכום שהתקבל (${fmtSats(utxo.value)}) נמוך מהנדרש (${fmtSats(S.plan.total)}).` : /refund/.test(e.message) ? 'כתובת ההחזר אינה תקינה לרשת הזו.' : e.message);
+  }
+  if (online === false) return showManual();
+  renderTxList(false);
+  await broadcastAll();
+}
+function showManual() {
+  renderTxList(true);
+  $('manualNote').hidden = false; $('pushLink').href = NET.explorer + '/tx/push';
+  $('manualWait').textContent = S.built.waitAfter >= 0 ? ' חשוב: אחרי שידור העסקה הראשונה, המתינו שתאושר בבלוק לפני שמשדרים את השאר.' : '';
+  setStatus($('revealStatus'), 'bad', 'אין גישה לרשת מכאן. שדרו את העסקאות ידנית:');
+  showDone(false);
+}
+async function broadcastAll() {
+  const st = $('revealStatus'), txs = S.built.txs, w = S.built.waitAfter;
+  $('retryBtn').hidden = true;
+  try {
+    for (let i = 0; i < txs.length; i++) {
+      const t = txs[i];
+      if (w >= 0 && i === w + 1) {
+        for (;;) {
+          const s = await txStatus(txs[w].txid);
+          if (s && s.confirmed) { markTx(w, 'ok', 'אושרה בבלוק'); break; }
+          setStatus(st, '', 'ממתין לאישור בלוק של עסקת החלוקה. זה לוקח בדרך כלל 10–30 דקות. אפשר לסגור את הדף ולהמשיך אחר כך עם קובץ השחזור.');
+          await sleep(30000);
+        }
+      }
+      setStatus(st, '', `שולח עסקה ${i + 1} מתוך ${txs.length}…`);
+      const s = await txStatus(t.txid);
+      if (s) { markTx(i, 'ok', s.confirmed ? 'אושרה בבלוק' : 'נשלחה'); continue; }
+      try { await api('/tx', { method: 'POST', body: t.hex }); }
+      catch (e) {
+        if (online === false) return showManual();
+        if (!/already|known|in chain/i.test(e.message)) { markTx(i, 'bad', 'נדחתה'); throw new Error(e.message.slice(0, 180)); }
+      }
+      markTx(i, 'ok', 'נשלחה');
+    }
+    save('archiv.pending', null);
+    setStatus(st, 'ok', 'המסמך פורסם. הוא יופיע בארכיון תוך דקות, ויהיה סופי אחרי אישור בבלוק.');
+    showDone(true);
+    archive.loaded = false;
+  } catch (e) {
+    setStatus(st, 'bad', 'הרשת דחתה עסקה: ' + e.message + '. אפשר לנסות שוב; עסקאות שכבר נשלחו לא יישלחו פעמיים.');
+    $('retryBtn').hidden = false;
+  }
+}
+$('retryBtn').addEventListener('click', () => broadcastAll());
+function showDone(sent) {
+  $('doneId').textContent = S.built.documentId;
+  $('doneFee').textContent = fmtSats(S.built.fees) + (S.built.refunded > 0n ? ` · הוחזרו ${fmtSats(S.built.refunded)}` : '');
+  $('doneLink').href = NET.explorer + '/tx/' + S.built.documentId.slice(0, 64);
+  $('doneArea').hidden = false;
+}
+
+// ---------- recovery ----------
+$('recoveryFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (f) $('recoveryIn').value = await f.text(); });
+$('recoverBtn').addEventListener('click', () => resume($('recoveryIn').value));
+async function resume(json) {
+  $('errRec').textContent = '';
+  try {
+    const r = JSON.parse(json);
+    if (r.network !== CONFIG.network) throw new Error(`הקובץ שייך לרשת ${r.network}, והאתר מחובר ל-${CONFIG.network}.`);
+    const { plan, refund } = E.importRecovery(r);
+    $('title').value = plan.doc.title; $('abstract').value = plan.doc.abstract || ''; $('keywords').value = plan.doc.keywords || ''; $('feeRate').value = plan.feeRate; $('refund').value = refund;
+    S.doc = plan.doc; S.sizes = plan.sizes; showDocInfo(); updateCost();
+    startPayment(plan, refund);
+  } catch (e) { $('errRec').textContent = 'לא ניתן לטעון את הקובץ: ' + e.message; }
+}
+
+// ---------- archive ----------
+const archive = { loaded: false, items: [], byTxid: new Map(), lastConfirmed: null, done: false };
+async function toItem(tx) {
+  const w = tx.vin[0] && tx.vin[0].witness; if (!w) return null;
+  let p; try { p = E.parseWitnessHex(w); } catch { p = null; }
+  if (!p) return null;
+  const m = p.metadata || {};
+  const it = { txid: tx.txid, time: tx.status.block_time || null, ...p, official: m.app === E.ARCHIVE_TAG, kind: m.kind || 'single', hidden: CONFIG.hiddenTxids.includes(tx.txid) };
+  if (it.kind === 'single' || !it.official) {
+    try { it.content = await decodeBody(p.body, p.contentEncoding); it.docSha = E.sha256Hex(it.content); it.intact = it.official ? it.docSha === m.sha256 : null; }
+    catch { it.content = null; it.intact = false; }
+    if (it.content && /^text\//.test(it.contentType)) it.text = dec.decode(it.content);
+  } else if (it.kind === 'multipart') it.docSha = m.sha256;
+  return it;
+}
+async function loadArchive(more = false) {
+  const st = $('archStatus'); st.hidden = false;
+  setStatus(st, '', "טוען את הארכיון מהבלוקצ'יין…");
+  if (!more) { archive.items = []; archive.byTxid.clear(); archive.lastConfirmed = null; archive.done = false; }
+  try {
+    const txs = await api(more ? `/address/${ARCHIVE}/txs/chain/${archive.lastConfirmed}` : `/address/${ARCHIVE}/txs`);
+    for (const tx of txs) {
+      if (tx.status.confirmed) archive.lastConfirmed = tx.txid;
+      if (archive.byTxid.has(tx.txid)) continue;
+      const it = await toItem(tx); if (!it) continue;
+      archive.items.push(it); archive.byTxid.set(it.txid, it);
+    }
+    archive.done = txs.filter((t) => t.status.confirmed).length < 25;
+    archive.loaded = true;
+    const any = archive.items.some((i) => i.official && !i.hidden && i.kind !== 'part');
+    st.hidden = any;
+    if (!any) setStatus(st, 'ok', 'הארכיון עדיין ריק. המסמך הראשון יכול להיות שלכם.');
+    renderArchive();
+  } catch {
+    setStatus(st, 'bad', online === false ? 'אין כאן גישה לרשת, ולכן אי אפשר לקרוא את הארכיון. אפשר לצפות בכתובת הארכיון ישירות ב-explorer.' : 'טעינת הארכיון נכשלה. נסו שוב בעוד רגע.');
+    if (online === false) { archive.items = []; renderArchive(true); }
+  }
+}
+function visibleItems() {
+  const q = $('search').value.trim().toLowerCase(), showExt = $('showExternal').checked;
+  return archive.items.filter((i) => !i.hidden && i.kind !== 'part' && (i.official || showExt))
+    .filter((i) => !q || (i.metadata.title || '').toLowerCase().includes(q) || (i.metadata.file || '').toLowerCase().includes(q) || (i.metadata.abstract || '').toLowerCase().includes(q) || (i.metadata.keywords || '').toLowerCase().includes(q) || (i.text && i.text.toLowerCase().includes(q)));
+}
+function renderArchive(offline = false) {
+  const list = $('archList'); list.textContent = '';
+  const ext = archive.items.filter((i) => !i.hidden && !i.official).length;
+  $('extCount').textContent = ext ? `(${ext})` : '';
+  if (offline) {
+    const a = document.createElement('a'); a.href = `${NET.explorer}/address/${ARCHIVE}`; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = 'פתיחת כתובת הארכיון ב-mempool.space'; a.style.padding = '12px 2px'; list.append(a);
+  }
+  const shown = visibleItems();
+  for (const it of shown) {
+    const b = document.createElement('button'); b.className = 'item'; b.type = 'button';
+    const t = document.createElement('span'); t.className = 't'; t.textContent = it.metadata.title || '(ללא כותרת)';
+    if (it.kind === 'multipart') { const x = document.createElement('span'); x.className = 'parts'; x.textContent = `${(it.metadata.parts || []).length} חלקים`; t.append(' ', x); }
+    if (!it.official) { const x = document.createElement('span'); x.className = 'ext'; x.textContent = 'חיצוני – לא נוצר דרך ארכיב'; t.append(' ', x); }
+    const tag = document.createElement('span'); tag.className = 'tag';
+    tag.textContent = (it.kind === 'multipart' ? it.metadata.contentType : it.contentType || '').split(';')[0];
+    const meta = document.createElement('span'); meta.className = 'meta';
+    const size = it.official ? it.metadata.size : (it.content || it.body).length;
+    [it.time ? new Date(it.time * 1000).toLocaleDateString('he-IL') : 'ממתין לאישור', fmtBytes(size || 0)].forEach((s) => { const x = document.createElement('span'); x.textContent = s; meta.append(x); });
+    const id = document.createElement('span'); id.className = 'mono'; id.textContent = it.txid.slice(0, 12) + '…'; meta.append(id);
+    b.append(t, tag, meta); b.addEventListener('click', () => openItem(it)); list.append(b);
+  }
+  if (!shown.length && archive.items.length && $('search').value.trim()) { const p = document.createElement('p'); p.style.color = 'var(--muted)'; p.textContent = 'אין תוצאות לחיפוש הזה.'; list.append(p); }
+  $('moreBtn').hidden = archive.done || !archive.items.length;
+}
+async function getPart(id) {
+  const txid = id.replace(/i\d+$/, '');
+  if (archive.byTxid.has(txid)) return archive.byTxid.get(txid);
+  const tx = await api('/tx/' + txid);
+  const it = await toItem(tx);
+  if (it) { archive.byTxid.set(txid, it); if (!archive.items.includes(it)) archive.items.push(it); }
+  return it;
+}
+// Joins a multipart document's parts in order, decompresses, and checks the result against the recorded fingerprint.
+async function assemble(it, onProgress) {
+  if (it.assembled) return it.assembled;
+  const m = it.metadata, ids = m.parts || [], chunks = [];
+  for (let i = 0; i < ids.length; i++) {
+    onProgress && onProgress(i + 1, ids.length);
+    const p = await getPart(ids[i]);
+    if (!p || p.metadata.kind !== 'part' || p.metadata.i !== i || p.metadata.doc !== m.sha256) throw new Error(`חלק ${i + 1} חסר או לא תואם`);
+    chunks.push(p.body);
+  }
+  const joined = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let o = 0; for (const c of chunks) { joined.set(c, o); o += c.length; }
+  const content = await decodeBody(joined, m.contentEncoding);
+  const intact = E.sha256Hex(content) === m.sha256;
+  it.assembled = { content, intact };
+  if (/^text\//.test(m.contentType || '')) it.text = dec.decode(content);
+  return it.assembled;
+}
+async function openItem(it) {
+  const v = $('viewer'); v.hidden = false; v.textContent = '';
+  const m = it.metadata, multi = it.kind === 'multipart';
+  const h = document.createElement('h3'); h.style.cssText = 'font-family:var(--display);margin:0 0 6px;font-size:1.3rem'; h.textContent = m.title || '(ללא כותרת)';
+  const dl = document.createElement('dl'); dl.className = 'ledger';
+  const rows = [['מזהה המסמך', it.txid + 'i0', true], ['טביעת אצבע', it.official ? m.sha256 : it.docSha, true], ['קובץ מקורי', m.file || '–'], ['נרשם', fmtDate(it.time)],
+    ['מקור', it.official ? 'נרשם דרך ארכיב' : 'רישום חיצוני, לא נוצר דרך ארכיב']];
+  if (multi) rows.splice(3, 0, ['חלקים', String((m.parts || []).length)]);
+  for (const [k, val, mono] of rows) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = val; if (mono) dd.className = 'mono'; dl.append(dt, dd); }
+  const seal = document.createElement('div'); seal.className = 'seal wait'; seal.textContent = multi ? 'מרכיב את החלקים…' : 'בודק…';
+  v.append(h);
+  if (m.abstract) { const ab = document.createElement('p'); ab.dir = 'auto'; ab.style.cssText = 'margin:0 0 10px;color:var(--muted)'; ab.textContent = m.abstract; v.append(ab); }
+  v.append(dl, seal);
+  v.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
+  let content, intact, type = multi ? m.contentType : it.contentType;
+  try {
+    if (multi) ({ content, intact } = await assemble(it, (i, n) => { seal.textContent = `מרכיב חלק ${i} מתוך ${n}…`; }));
+    else { content = it.content; intact = it.intact; }
+    if (!content) throw new Error('לא ניתן לפענח את התוכן');
+  } catch (e) { seal.className = 'seal bad'; seal.textContent = e.message; return; }
+  if (intact === true) { seal.className = 'seal ok'; seal.textContent = multi ? `✓ כל ${(m.parts || []).length} החלקים נמצאו, והמסמך תואם לטביעת האצבע` : '✓ המסמך תואם לטביעת האצבע שנרשמה'; }
+  else if (intact === false) { seal.className = 'seal bad'; seal.textContent = 'התוכן אינו תואם לטביעת האצבע שנרשמה'; }
+  else seal.remove();
+  const links = document.createElement('div'); links.className = 'row'; links.style.marginTop = '10px';
+  const ex = document.createElement('a'); ex.href = NET.explorer + '/tx/' + it.txid; ex.target = '_blank'; ex.rel = 'noopener'; ex.textContent = 'העסקה ב-explorer'; links.append(ex);
+  // Registered content is untrusted. A blob URL runs in this site's origin, so only types that cannot
+  // execute script are opened in the browser; anything else (HTML, SVG, XML, unknown) is offered as a download.
+  const safe = safeType(type);
+  const url = URL.createObjectURL(new Blob([content], { type: safe || 'application/octet-stream' }));
+  const op = document.createElement('a'); op.href = url; op.rel = 'noopener';
+  if (safe) { op.target = '_blank'; op.textContent = 'פתיחת הקובץ'; }
+  else { op.download = (m.file || 'archiv-' + it.txid.slice(0, 8)).replace(/[\\/:*?"<>|]/g, '_'); op.textContent = 'הורדת הקובץ (לא נפתח בדפדפן מטעמי אבטחה)'; }
+  links.append(op);
+  if (CONFIG.publicPages && it.official) { const pp = document.createElement('a'); pp.href = `p/${it.txid}.html`; pp.target = '_blank'; pp.rel = 'noopener'; pp.textContent = 'דף פרסום קבוע'; links.append(pp); }
+  if (NET.ordinals) { const oa = document.createElement('a'); oa.href = `${NET.ordinals}/inscription/${it.txid}i0`; oa.target = '_blank'; oa.rel = 'noopener'; oa.textContent = 'ב-ordinals.com'; links.append(oa); }
+  v.append(links);
+  if (/^text\//.test(type || '') && !/html/.test(type)) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = dec.decode(content); v.append(pre); }
+  else if (/^application\/pdf/.test(type || '')) { const f = document.createElement('iframe'); f.src = url; f.title = m.title || 'PDF'; v.append(f); }
+}
+$('search').addEventListener('input', () => renderArchive(online === false));
+$('showExternal').addEventListener('change', () => renderArchive(online === false));
+$('reloadArchive').addEventListener('click', () => loadArchive());
+$('moreBtn').addEventListener('click', () => loadArchive(true));
+
+// ---------- verify ----------
+let vBytes = null;
+async function vTake(file) { vBytes = new Uint8Array(await file.arrayBuffer()); $('vHint').textContent = file.name; $('vHash').textContent = E.sha256Hex(vBytes); }
+$('vFile').addEventListener('change', (e) => e.target.files[0] && vTake(e.target.files[0]));
+dropZone($('vDrop'), vTake);
+$('vText').addEventListener('input', () => { vBytes = null; $('vHint').textContent = 'גררו לכאן קובץ'; });
+async function confirmItem(it, hash) {
+  if (it.kind === 'multipart') { const a = await assemble(it); return a.intact && it.metadata.sha256 === hash; }
+  return it.docSha === hash && it.intact !== false;
+}
+$('verifyBtn').addEventListener('click', async () => {
+  const out = $('vResult'); out.textContent = '';
+  const bytes = vBytes || ($('vText').value ? enc.encode($('vText').value) : null);
+  if (!bytes) return result(out, 'bad', 'בחרו קובץ או הדביקו טקסט.');
+  const hash = E.sha256Hex(bytes); $('vHash').textContent = hash;
+  const txid = $('vTxid').value.trim().toLowerCase().replace(/i\d+$/, '');
+  const label = (it) => `"${it.metadata.title || ''}"${it.time ? ', נרשם ב-' + fmtDate(it.time) : ''}${it.official ? '' : ' (רישום חיצוני, לא נוצר דרך ארכיב)'}`;
+  try {
+    if (txid) {
+      if (!/^[0-9a-f]{64}$/.test(txid)) return result(out, 'bad', 'המזהה צריך להיות 64 תווים הקסדצימליים, אפשר עם i0 בסוף.');
+      const it = await getPart(txid);
+      if (!it || it.kind === 'part') return result(out, 'bad', 'בעסקה הזו אין מסמך רשום.');
+      return (await confirmItem(it, hash)) ? result(out, 'ok', `תואם. המסמך זהה לרישום ${label(it)}.`) : result(out, 'bad', 'לא תואם. הקובץ שונה מהמסמך שנרשם, ולו בתו אחד.');
+    }
+    if (!archive.loaded) await loadArchive();
+    const hit = archive.items.find((i) => i.kind !== 'part' && i.docSha === hash);
+    if (hit && await confirmItem(hit, hash)) return result(out, 'ok', `נמצא בארכיון: ${label(hit)}.`);
+    result(out, 'bad', online === false ? 'אין גישה לרשת מכאן. טביעת האצבע למעלה מאפשרת להשוות ידנית מול רישום ב-explorer.' : 'המסמך הזה לא נמצא בארכיון.');
+  } catch (e) { result(out, 'bad', online === false ? 'אין גישה לרשת מכאן. השוו את טביעת האצבע למעלה ידנית.' : 'הבדיקה נכשלה: ' + String(e.message).slice(0, 120)); }
+});
+function result(el, kind, text) { const d = document.createElement('div'); d.className = 'result ' + kind; d.textContent = text; el.append(d); }
+
+// ---------- copy buttons ----------
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-copy],[data-copy-val]'); if (!b) return;
+  copy(b.dataset.copy ? $(b.dataset.copy).textContent : $(b.dataset.copyVal).value, b);
+});
+
+// ---------- boot ----------
+$('archiveAddr').textContent = ARCHIVE;
+$('reportEmail').textContent = CONFIG.reportEmail;
+if (CONFIG.network === 'mainnet') { $('netPill').className = 'pill main'; $('netPill').textContent = 'רשת ראשית'; $('testBanner').hidden = true; $('refund').placeholder = 'bc1q…'; }
+else $('netPill').textContent = CONFIG.network === 'signet' ? 'רשת בדיקה (signet)' : 'רשת בדיקה (testnet4)';
+fromText(); refreshPrepare(); loadFees();
+const pending = load('archiv.pending');
+if (pending) { $('recoveryIn').value = pending; $('recoverBox').open = true; }
+const h = (location.hash || '').slice(1); if (['archive', 'verify'].includes(h)) showTab(h);
+</script>

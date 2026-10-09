@@ -5,11 +5,11 @@
   "description": "ארכיב – ארכיון ציבורי קבוע על הבלוקצ'יין של ביטקוין",
   "type": "module",
   "scripts": {
-    "build:app": "node scripts/build.mjs",
-    "build:index": "node scripts/build-index.mjs",
-    "build": "node scripts/build.mjs && node scripts/build-index.mjs",
-    "test": "node test/engine.test.mjs && node test/signatures.test.mjs && node test/index.test.mjs",
-    "demo-api": "node test/mock-chain.mjs 8787"
+    "build:app": "node build.mjs",
+    "build:index": "node build-index.mjs",
+    "build": "node build.mjs && node build-index.mjs",
+    "test": "node engine.test.mjs && node signatures.test.mjs && node index.test.mjs",
+    "demo-api": "node mock-chain.mjs 8787"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",

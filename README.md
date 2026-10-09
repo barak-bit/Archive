@@ -21,9 +21,15 @@
 
 **2. מעלים את הקבצים**
 - במסך שנפתח לוחצים על הקישור **uploading an existing file**.
-- גוררים לחלון את **כל התוכן** של התיקייה `archiv` (לא את התיקייה עצמה): `src`, `scripts`, `test`, `.github`, `config.json`, `package.json`, `.gitignore`, `README.md`.
-- **חשוב:** `.github` ו-`.gitignore` הן תיקייה וקובץ "מוסתרים". במק לוחצים ב-Finder על **Cmd+Shift+.** כדי לראות אותם. בלי התיקייה `.github` האתר לא ייבנה.
+- גוררים לחלון את כל הקבצים מהתיקייה `archiv`. כולם קבצים רגילים, בלי תיקיות.
 - למטה לוחצים **Commit changes**.
+
+**2א. יוצרים את קובץ הבנייה**
+את הקובץ הזה צריך ליצור ישירות באתר, כי הוא חייב לשבת בתיקייה `.github/workflows`.
+- במאגר: **Add file** ← **Create new file**.
+- בשדה שם הקובץ מקלידים בדיוק: `.github/workflows/pages.yml` (כל `/` יוצר תיקייה).
+- פותחים את הקובץ `pages.yml` מהתיקייה במחשב בפנקס רשימות, מעתיקים את כל התוכן ומדביקים בחלון העריכה.
+- **Commit changes**.
 
 **3. מפעילים את GitHub Pages**
 - במאגר: **Settings** ← בתפריט הצד **Pages**.
@@ -75,11 +81,13 @@ Settings ← Pages ← **Custom domain**, ואצל רשם הדומיין מוס�
 ## למפתחים
 
 ```
-src/engine.js           בניית העסקאות וחתימה (Ordinals, פיצול, דחיסה, שחזור)
-src/app.html            האפליקציה
-scripts/build.mjs       בונה את dist/index.html
-scripts/build-index.mjs בונה את dist/p/ מהבלוקצ'יין
-test/                   בדיקות, כולל API מדומה של ביטקוין (mock-chain.mjs)
+engine.js           בניית העסקאות וחתימה (Ordinals, פיצול, דחיסה, שחזור)
+app.html            האפליקציה
+build.mjs           בונה את dist/index.html
+build-index.mjs     בונה את dist/p/ מהבלוקצ'יין
+*.test.mjs          בדיקות
+mock-chain.mjs      API מדומה של ביטקוין, לבדיקות
+pages.yml           עותק של קובץ הבנייה, ‎.github/workflows/pages.yml
 ```
 
 ```
