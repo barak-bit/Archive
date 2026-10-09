@@ -2,8 +2,9 @@
 // Used by the web app (bundled) and by the Node tests.
 import * as btc from '@scure/btc-signer';
 import * as ordinals from 'micro-ordinals';
-import { hex, utf8 } from '@scure/base';
+import { hex, utf8, base64 } from '@scure/base';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { secp256k1, schnorr } from '@noble/curves/secp256k1.js';
 
 export const NETWORKS = {
   mainnet: { btc: btc.NETWORK, api: 'https://mempool.space/api', explorer: 'https://mempool.space', ordinals: 'https://ordinals.com' },
@@ -43,14 +44,14 @@ export const derive = (secret, label) => sha256(concat(secret, utf8.decode('arch
 // doc = { stored, contentEncoding ('' | 'gzip'), contentType, title, file, sha256, size }
 // `stored` is what goes on chain (maybe gzip); sha256 and size describe the original file.
 export const MAX_ABSTRACT = 1500, MAX_KEYWORDS = 300, MAX_PUBLISHER = 120, MAX_CATEGORY = 40;
-export function makeDoc({ stored, contentEncoding = '', contentType, title = '', file = '', sha256: docHash, size, abstract = '', keywords = '', publisher = '', category = '' }) {
+export function makeDoc({ stored, contentEncoding = '', contentType, title = '', file = '', sha256: docHash, size, abstract = '', keywords = '', publisher = '', category = '', extra }) {
   if (!(stored instanceof Uint8Array) || !stored.length) throw new Error('empty document');
   if (stored.length > MAX_DOC) throw new Error('document too large');
   if (contentEncoding && contentEncoding !== 'gzip') throw new Error('unsupported encoding');
   if (!/^[0-9a-f]{64}$/.test(docHash || '')) throw new Error('missing document hash');
   return { stored, contentEncoding, contentType: contentType || 'application/octet-stream', title, file, sha256: docHash, size: size ?? stored.length,
     abstract: String(abstract).slice(0, MAX_ABSTRACT), keywords: String(keywords).slice(0, MAX_KEYWORDS),
-    publisher: String(publisher).slice(0, MAX_PUBLISHER), category: String(category).slice(0, MAX_CATEGORY) };
+    publisher: String(publisher).slice(0, MAX_PUBLISHER), category: String(category).slice(0, MAX_CATEGORY), ...(extra ? { extra } : {}) };
 }
 export const partCount = (doc) => Math.ceil(doc.stored.length / MAX_PART);
 const baseMeta = (doc) => {
@@ -59,6 +60,7 @@ const baseMeta = (doc) => {
   if (doc.keywords) m.keywords = doc.keywords;
   if (doc.publisher) m.publisher = doc.publisher;
   if (doc.category) m.category = doc.category;
+  if (doc.extra) Object.assign(m, doc.extra);
   return m;
 };
 
@@ -214,7 +216,7 @@ export function parseWitnessHex(witnessHex) {
 export function exportRecovery(plan, networkName, refundAddress = '') {
   const d = plan.doc;
   return JSON.stringify({ v: 2, network: networkName, secret: hex.encode(plan.secret), feeRate: plan.feeRate, refund: refundAddress, payAddress: plan.payAddress,
-    doc: { stored: hex.encode(d.stored), contentEncoding: d.contentEncoding, contentType: d.contentType, title: d.title, file: d.file, sha256: d.sha256, size: d.size, abstract: d.abstract, keywords: d.keywords, publisher: d.publisher, category: d.category } });
+    doc: { stored: hex.encode(d.stored), contentEncoding: d.contentEncoding, contentType: d.contentType, title: d.title, file: d.file, sha256: d.sha256, size: d.size, abstract: d.abstract, keywords: d.keywords, publisher: d.publisher, category: d.category, ...(d.extra ? { extra: d.extra } : {}) } });
 }
 export function importRecovery(json) {
   const r = typeof json === 'string' ? JSON.parse(json) : json;
@@ -224,4 +226,81 @@ export function importRecovery(json) {
   const plan = createPlan(doc, net, hex.decode(r.secret), r.feeRate);
   if (plan.payAddress !== r.payAddress) throw new Error('recovery file does not match');
   return { plan, networkName: r.network, refund: r.refund || '' };
+}
+
+// ---------- removal by the publisher ----------
+// A publisher removes their own document from display by registering a small "withdraw" record in the
+// archive, signed with proof of ownership. The document itself stays on chain; sites that follow these
+// records stop showing its content and keep a public stub (date, block, fingerprint) instead.
+// Two proofs are accepted:
+//   key:    a Schnorr signature by the key that signed the registration itself (derived from the recovery file)
+//   wallet: a Bitcoin signed message from an address that paid for the registration
+export const withdrawMessage = (networkName, targetTxid) => `${ARCHIVE_TAG} withdraw ${networkName} ${targetTxid}`;
+
+// The x-only key at the start of an inscription's reveal script: the key that controlled the registration.
+export function revealKey(witnessHex) {
+  if (!witnessHex || witnessHex.length < 2) return null;
+  const s = hex.decode(witnessHex[1]);
+  return s.length > 34 && s[0] === 0x20 && s[33] === 0xac ? s.subarray(1, 33) : null;
+}
+// Private key behind revealKey() for a plan rebuilt from its recovery file.
+export const ownerKey = (plan) => plan.mode === 'single' ? plan.priv : derive(plan.secret, 'index');
+export const ownsTarget = (plan, targetWitnessHex) => { const k = revealKey(targetWitnessHex); return !!k && hex.encode(k) === hex.encode(btc.utils.pubSchnorr(ownerKey(plan))); };
+export function signWithdrawWithKey(plan, networkName, targetTxid) {
+  return hex.encode(schnorr.sign(sha256(utf8.decode(withdrawMessage(networkName, targetTxid))), ownerKey(plan), ZERO_AUX));
+}
+
+// Bitcoin signed message (the format wallets such as UniSat produce): base64 of [header, r, s].
+function messageHash(message) {
+  const m = utf8.decode(message), n = m.length;
+  const len = n < 253 ? Uint8Array.of(n) : Uint8Array.of(253, n & 255, n >> 8);
+  return sha256(sha256(concat(utf8.decode('\x18Bitcoin Signed Message:\n'), len, m)));
+}
+// Every address the signer of `sigB64` could have signed from (empty if the signature is malformed).
+export function signerAddresses(message, sigB64, net) {
+  try {
+    const raw = base64.decode(String(sigB64).trim());
+    if (raw.length !== 65 || raw[0] < 27 || raw[0] > 42) return [];
+    const pub = secp256k1.recoverPublicKey(concat(Uint8Array.of((raw[0] - 27) & 3), raw.subarray(1)), messageHash(message), { prehash: false });
+    const wpkh = btc.p2wpkh(pub, net);
+    return [wpkh.address, btc.p2pkh(pub, net).address, btc.p2sh(wpkh, net).address, btc.p2tr(pub.subarray(1), undefined, net).address];
+  } catch { return []; }
+}
+export function signMessageForTest(message, priv) { // what a wallet does; used by the tests
+  const sig = secp256k1.sign(messageHash(message), priv, { prehash: false, format: 'recovered' });
+  return base64.encode(concat(Uint8Array.of(31 + sig[0]), sig.subarray(1)));
+}
+
+export function makeWithdrawDoc({ networkName, targetTxid, proof }) {
+  const text = `בקשת הסרה: המפרסם מבקש להסיר מהתצוגה את המסמך ${targetTxid}i0.\nRemoval request: the publisher asks to remove document ${targetTxid}i0 from display.\n`;
+  const stored = utf8.decode(text);
+  return makeDoc({ stored, contentType: 'text/plain;charset=utf-8', title: 'בקשת הסרה', sha256: sha256Hex(stored), size: stored.length,
+    extra: { kind: 'withdraw', network: networkName, target: targetTxid, proof } });
+}
+
+// Checks a withdraw record against the registration it names.
+//   target: { txid, witness (hex array of the registration's reveal input) }
+//   payers: addresses that paid for the registration (needed for wallet proofs only)
+export function verifyWithdrawal(meta, target, networkName, net, payers = []) {
+  if (!meta || meta.app !== ARCHIVE_TAG || meta.kind !== 'withdraw' || meta.target !== target.txid || meta.network !== networkName) return false;
+  const proof = meta.proof || {}, msg = withdrawMessage(networkName, target.txid);
+  try {
+    if (proof.type === 'key') {
+      const k = revealKey(target.witness);
+      return !!k && schnorr.verify(hex.decode(proof.sig), sha256(utf8.decode(msg)), k);
+    }
+    if (proof.type === 'wallet') return payers.includes(proof.address) && signerAddresses(msg, proof.sig, net).includes(proof.address);
+  } catch {}
+  return false;
+}
+// Hops from a registration's final transaction back to the transaction that paid for it.
+export const paymentDepth = (meta) => meta && meta.kind === 'multipart' ? 3 : 1;
+
+// Documents hidden by the site operator (after a complaint), from config.json:
+//   "hidden": [{ "txid": "...", "reason": "...", "date": "2026-10-09" }]   (older "hiddenTxids": ["..."] still works)
+export function operatorHidden(config) {
+  const out = new Map();
+  for (const t of config.hiddenTxids || []) if (/^[0-9a-f]{64}$/.test(t)) out.set(t, { reason: '', date: '' });
+  for (const h of config.hidden || []) if (h && /^[0-9a-f]{64}$/.test(h.txid)) out.set(h.txid, { reason: String(h.reason || ''), date: String(h.date || '') });
+  return out;
 }

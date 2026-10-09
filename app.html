@@ -261,6 +261,16 @@ a { color: var(--accent); }
       <h2><span class="n">3</span>תשלום</h2>
       <p class="lead">שלחו את הסכום לכתובת התשלום הזמנית הזו, מכל ארנק ביטקוין. תשלום אחד מכסה את כל העסקאות.</p>
       <div id="payArea" hidden>
+        <div class="banner warn" id="recoveryGate" style="margin-bottom:12px">
+          <strong>שלב חובה: שמרו את קובץ השחזור.</strong> בלעדיו אי אפשר להשלים רישום שנקטע, וגם לא להוכיח בעתיד שהמסמך שלכם (למשל כדי להסיר אותו). פרטי התשלום יופיעו אחרי השמירה.
+          <div class="row" style="margin-top:8px">
+            <button class="btn small" id="saveRecovery">שמירת קובץ השחזור</button>
+            <button class="btn ghost small" id="copyRecovery">העתקת התוכן במקום</button>
+          </div>
+        </div>
+        <p class="hint" id="recoverySaved" hidden>✓ קובץ השחזור נשמר. שמרו אותו במקום בטוח: מי שמחזיק בו יכול גם לבקש להסיר את המסמך.</p>
+        <div class="banner info" id="withdrawNote" hidden></div>
+        <div id="payDetails" hidden>
         <dl class="ledger">
           <dt>סכום</dt><dd><span class="big" id="payAmount"></span></dd>
         </dl>
@@ -271,13 +281,6 @@ a { color: var(--accent); }
           <button class="btn small" id="cardBtn" hidden>תשלום בכרטיס אשראי</button>
         </div>
         <p class="err" id="cardErr"></p>
-        <div class="banner warn" style="margin-bottom:10px">
-          <strong>שמרו את קובץ השחזור לפני התשלום.</strong> אם הדף ייסגר באמצע, רק הקובץ הזה יאפשר להשלים את הרישום.
-          <div class="row" style="margin-top:8px">
-            <button class="btn small" id="saveRecovery">שמירת קובץ</button>
-            <button class="btn ghost small" id="copyRecovery">העתקת התוכן</button>
-          </div>
-        </div>
         <div class="status" id="payStatus"><span class="dot pulse"></span><span>ממתין לתשלום…</span></div>
         <details class="manual" id="manualPay">
           <summary>שילמתי, אבל התשלום לא זוהה</summary>
@@ -288,6 +291,7 @@ a { color: var(--accent); }
           </div>
           <button class="btn ghost small" id="manualPayBtn">המשך עם הפרטים האלה</button>
         </details>
+        </div>
       </div>
     </section>
 
@@ -332,6 +336,11 @@ a { color: var(--accent); }
     <div class="list" id="archList"></div>
     <div class="row" style="margin-top:12px"><button class="btn ghost small" id="moreBtn" hidden>טעינת רישומים ישנים יותר</button></div>
     <div class="viewer" id="viewer" hidden></div>
+    <details class="manual" id="removedLog" hidden style="margin-top:16px">
+      <summary>יומן ההסרות <span id="removedCount"></span></summary>
+      <p class="hint" style="margin:8px 0">מסמכים שהאתר אינו מציג עוד, ומי החליט על כך. מפרסם יכול להסיר מסמך שלו בבקשה חתומה שנרשמת בבלוקצ'יין. מפעיל האתר יכול להסתיר מסמך רק עם סיבה כתובה. המסמכים עצמם נשארים בבלוקצ'יין.</p>
+      <div class="list" id="removedList"></div>
+    </details>
   </div>
 
   <!-- VERIFY -->
@@ -362,7 +371,7 @@ a { color: var(--accent); }
 <script>/*ENGINE*/</script>
 <script>
 // Settings come from config.json and are injected by scripts/build.mjs.
-const CONFIG = /*CONFIG*/{ network: 'testnet4', reportEmail: '', hiddenTxids: [], publicPages: false, cardPayment: { label: '', urlTemplate: '', signEndpoint: '' } }/*END*/;
+const CONFIG = /*CONFIG*/{ network: 'testnet4', reportEmail: '', hiddenTxids: [], hidden: [], publicPages: false, cardPayment: { label: '', urlTemplate: '', signEndpoint: '' } }/*END*/;
 
 const E = Engine;
 const NET = E.NETWORKS[CONFIG.network];
@@ -533,7 +542,7 @@ function metaProblem() {
 // Looks for the same content, or the same title, among the publications already loaded from the archive.
 function findDuplicates() {
   if (!S.doc) return { same: null, title: null };
-  const pool = archive.items.filter((i) => i.official && !i.hidden && i.kind !== 'part');
+  const pool = archive.items.filter((i) => i.official && !isRemoved(i) && isDocument(i));
   const same = pool.find((i) => (i.kind === 'multipart' ? i.metadata.sha256 : i.docSha) === S.doc.sha256) || null;
   const t = S.doc.title.trim().toLowerCase();
   const title = t ? pool.find((i) => i !== same && (i.metadata.title || '').trim().toLowerCase() === t) || null : null;
@@ -585,11 +594,15 @@ $('prepareBtn').addEventListener('click', () => {
 });
 
 // ---------- step 3: payment ----------
-function startPayment(plan, refund) {
+function startPayment(plan, refund, { recoveryKept = false } = {}) {
   S.plan = plan; S.refund = refund || ''; S.built = null;
   S.recovery = E.exportRecovery(plan, CONFIG.network, S.refund);
   save('archiv.pending', S.recovery);
   $('s3').classList.remove('locked'); $('payArea').hidden = false;
+  setRecoveryKept(recoveryKept);
+  const wd = plan.doc.extra && plan.doc.extra.kind === 'withdraw';
+  $('withdrawNote').hidden = !wd;
+  if (wd) $('withdrawNote').textContent = `תשלום עבור בקשת הסרה של המסמך ${plan.doc.extra.target.slice(0, 12)}…. הבקשה נרשמת בבלוקצ'יין, ואחרי אישור בבלוק האתר מפסיק להציג את המסמך.`;
   $('payAmount').textContent = `${fmtSats(plan.total)} (${btcStr(plan.total)} BTC)`;
   $('payAddr').textContent = plan.payAddress;
   $('payLink').href = `bitcoin:${plan.payAddress}?amount=${btcStr(plan.total)}`;
@@ -657,11 +670,16 @@ $('cardBtn').addEventListener('click', async () => {
     setStatus($('payStatus'), '', 'אחרי התשלום בכרטיס, הביטקוין יגיע לכתובת התשלום. זה עשוי לקחת כמה דקות.');
   } catch { if (win) win.close(); $('cardErr').textContent = 'לא הצלחנו לפתוח את דף התשלום. נסו שוב או שלמו מארנק.'; }
 });
+// Payment details stay hidden until the recovery file is saved or copied: it is the only way to
+// finish an interrupted registration and the publisher's proof of ownership later.
+function setRecoveryKept(kept) { $('recoveryGate').hidden = kept; $('recoverySaved').hidden = !kept; $('payDetails').hidden = !kept; }
 $('saveRecovery').addEventListener('click', () => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([S.recovery], { type: 'application/json' }));
-  a.download = `archiv-recovery-${S.plan.payAddress.slice(-8)}.json`; document.body.append(a); a.click(); a.remove();
+  const wd = S.plan.doc.extra && S.plan.doc.extra.kind === 'withdraw';
+  a.download = `archiv-${wd ? 'removal' : 'recovery'}-${S.plan.payAddress.slice(-8)}.json`; document.body.append(a); a.click(); a.remove();
+  setRecoveryKept(true);
 });
-$('copyRecovery').addEventListener('click', (e) => copy(S.recovery, e.target));
+$('copyRecovery').addEventListener('click', (e) => { copy(S.recovery, e.target); setRecoveryKept(true); });
 
 // ---------- step 4: publish ----------
 const TX_LABEL = (t, n) => t.name === 'split' ? 'חלוקת התשלום' : t.name === 'reveal' ? 'המסמך' : t.name === 'index-commit' ? 'הכנת האינדקס' : t.name === 'index' ? 'אינדקס המסמך' : t.name.replace('part', 'חלק') + ` מתוך ${n}`;
@@ -734,7 +752,8 @@ async function broadcastAll() {
       markTx(i, 'ok', 'נשלחה');
     }
     save('archiv.pending', null);
-    setStatus(st, 'ok', 'המסמך פורסם. הוא יופיע בארכיון תוך דקות, ויהיה סופי אחרי אישור בבלוק.');
+    const wd = S.plan && S.plan.doc.extra && S.plan.doc.extra.kind === 'withdraw';
+    setStatus(st, 'ok', wd ? 'בקשת ההסרה נשלחה. אחרי אישור בבלוק (בדרך כלל 10–30 דקות) האתר יפסיק להציג את המסמך, ודף הפרסום שלו יתעדכן בבנייה הבאה.' : 'המסמך פורסם. הוא יופיע בארכיון תוך דקות, ויהיה סופי אחרי אישור בבלוק.');
     showDone(true);
     archive.loaded = false;
   } catch (e) {
@@ -759,20 +778,56 @@ async function resume(json) {
     const r = JSON.parse(json);
     if (r.network !== CONFIG.network) throw new Error(`הקובץ שייך לרשת ${r.network}, והאתר מחובר ל-${CONFIG.network}.`);
     const { plan, refund } = E.importRecovery(r);
+    if (plan.doc.extra && plan.doc.extra.kind === 'withdraw') { showTab('register'); startPayment(plan, refund, { recoveryKept: true }); return; }
     $('title').value = plan.doc.title; $('abstract').value = plan.doc.abstract || ''; $('keywords').value = plan.doc.keywords || ''; $('publisher').value = plan.doc.publisher || ''; $('category').value = plan.doc.category || ''; $('feeRate').value = plan.feeRate; $('refund').value = refund;
     S.doc = plan.doc; S.sizes = plan.sizes; showDocInfo(); updateCost();
-    startPayment(plan, refund);
+    startPayment(plan, refund, { recoveryKept: true });
   } catch (e) { $('errRec').textContent = 'לא ניתן לטעון את הקובץ: ' + e.message; }
 }
 
 // ---------- archive ----------
-const archive = { loaded: false, items: [], byTxid: new Map(), lastConfirmed: null, done: false };
+const archive = { loaded: false, items: [], byTxid: new Map(), lastConfirmed: null, done: false, removed: new Map() };
+const isRemoved = (i) => archive.removed.has(i.txid);
+const isDocument = (i) => i.kind !== 'part' && i.kind !== 'withdraw';
+const OPERATOR_HIDDEN = E.operatorHidden(CONFIG);
+
+// ---------- removal ----------
+// Addresses that paid for a registration: walk back from its final transaction to the payment.
+async function payersOf(it) {
+  let id = it.vin0;
+  for (let i = 1; i < E.paymentDepth(it.metadata); i++) id = (await api('/tx/' + id)).vin[0].txid;
+  const pay = await api('/tx/' + id);
+  return (pay.vin || []).map((v) => v.prevout && v.prevout.scriptpubkey_address).filter(Boolean);
+}
+// Documents this site does not show: hidden by the operator (config.json), or withdrawn by their
+// publisher with a signed request registered in the archive. Requests are verified here, in the browser.
+async function computeRemovals() {
+  const removed = new Map();
+  for (const [t, h] of OPERATOR_HIDDEN) removed.set(t, { by: 'operator', ...h });
+  const reqs = archive.items.filter((i) => i.official && i.kind === 'withdraw').sort((a, b) => (a.time || 9e12) - (b.time || 9e12));
+  for (const w of reqs) {
+    const m = w.metadata;
+    if (removed.has(m.target) && removed.get(m.target).by === 'publisher') continue;
+    let target = archive.byTxid.get(m.target);
+    if (!target) { try { target = await getPart(m.target); } catch { continue; } }
+    if (!target || !target.official || !isDocument(target)) continue;
+    if (w.verified === undefined) {
+      try {
+        const payers = m.proof && m.proof.type === 'wallet' ? await payersOf(target) : [];
+        w.verified = E.verifyWithdrawal(m, { txid: target.txid, witness: target.witness }, CONFIG.network, NET.btc, payers);
+      } catch { continue; } // network trouble: try again on the next load
+    }
+    if (w.verified) removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: w.txid, time: w.time });
+  }
+  archive.removed = removed;
+}
+const removedWhy = (r) => r.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (r.time ? ` ב-${fmtDate(r.time)}` : ' (הבקשה ממתינה לאישור בבלוק)') : 'הוסתר על ידי מפעיל האתר' + (r.date ? ` ב-${r.date}` : '') + (r.reason ? `. הסיבה: ${r.reason}` : '');
 async function toItem(tx) {
   const w = tx.vin[0] && tx.vin[0].witness; if (!w) return null;
   let p; try { p = E.parseWitnessHex(w); } catch { p = null; }
   if (!p) return null;
   const m = p.metadata || {};
-  const it = { txid: tx.txid, time: tx.status.block_time || null, ...p, official: m.app === E.ARCHIVE_TAG, kind: m.kind || 'single', hidden: CONFIG.hiddenTxids.includes(tx.txid) };
+  const it = { txid: tx.txid, time: tx.status.block_time || null, ...p, official: m.app === E.ARCHIVE_TAG, kind: m.kind || 'single', witness: w, vin0: tx.vin[0].txid };
   if (it.kind === 'single' || !it.official) {
     try { it.content = await decodeBody(p.body, p.contentEncoding); it.docSha = E.sha256Hex(it.content); it.intact = it.official ? it.docSha === m.sha256 : null; }
     catch { it.content = null; it.intact = false; }
@@ -794,7 +849,8 @@ async function loadArchive(more = false) {
     }
     archive.done = txs.filter((t) => t.status.confirmed).length < 25;
     archive.loaded = true;
-    const any = archive.items.some((i) => i.official && !i.hidden && i.kind !== 'part');
+    await computeRemovals();
+    const any = archive.items.some((i) => i.official && !isRemoved(i) && isDocument(i));
     st.hidden = any;
     if (!any) setStatus(st, 'ok', 'הארכיון עדיין ריק. המסמך הראשון יכול להיות שלכם.');
     renderArchive();
@@ -812,7 +868,7 @@ function friendlyType(t) {
 }
 function visibleItems() {
   const q = $('search').value.trim().toLowerCase(), showExt = $('showExternal').checked;
-  return archive.items.filter((i) => !i.hidden && i.kind !== 'part' && (i.official || showExt))
+  return archive.items.filter((i) => !isRemoved(i) && isDocument(i) && (i.official || showExt))
     .filter((i) => !q || q.split(/\s+/).every((w) => searchText(i).includes(w)));
 }
 // Everything a search can match: descriptive details, identifiers and (for text) the content itself.
@@ -822,9 +878,9 @@ function searchText(i) {
 }
 function renderArchive(offline = false) {
   const list = $('archList');
-  const viewer = $('viewer'); if (list.contains(viewer)) { list.after(viewer); viewer.hidden = true; } // keep the viewer when the list is redrawn
+  const viewer = $('viewer'); if (list.contains(viewer) || $('removedList').contains(viewer)) { list.after(viewer); viewer.hidden = true; } // keep the viewer when the lists are redrawn
   list.textContent = '';
-  const ext = archive.items.filter((i) => !i.hidden && !i.official).length;
+  const ext = archive.items.filter((i) => !isRemoved(i) && !i.official).length;
   $('extCount').textContent = ext ? `(${ext})` : '';
   if (offline) {
     const a = document.createElement('a'); a.href = `${NET.explorer}/address/${ARCHIVE}`; a.target = '_blank'; a.rel = 'noopener';
@@ -847,6 +903,16 @@ function renderArchive(offline = false) {
   }
   if (!shown.length && archive.items.length && $('search').value.trim()) { const p = document.createElement('p'); p.style.color = 'var(--muted)'; p.textContent = 'אין תוצאות לחיפוש הזה.'; list.append(p); }
   $('moreBtn').hidden = archive.done || !archive.items.length;
+  const rl = $('removedList'); rl.textContent = '';
+  for (const [txid, r] of archive.removed) {
+    const it = archive.byTxid.get(txid); if (!it) continue;
+    const b = document.createElement('button'); b.className = 'item'; b.type = 'button';
+    const t = document.createElement('span'); t.className = 't mono'; t.textContent = txid.slice(0, 16) + '…';
+    const meta = document.createElement('span'); meta.className = 'meta';
+    [it.time ? 'פורסם ב-' + fmtDate(it.time) : 'ממתין לאישור', removedWhy(r)].forEach((x) => { const e = document.createElement('span'); e.textContent = x; meta.append(e); });
+    b.append(t, meta); b.addEventListener('click', () => { b.after($('viewer')); openItem(it); }); rl.append(b);
+  }
+  $('removedLog').hidden = !rl.children.length; $('removedCount').textContent = rl.children.length ? `(${rl.children.length})` : '';
 }
 async function getPart(id) {
   const txid = id.replace(/i\d+$/, '');
@@ -877,6 +943,7 @@ async function openItem(it) {
   const v = $('viewer'); v.hidden = false; v.textContent = '';
   const close = document.createElement('button'); close.type = 'button'; close.className = 'btn ghost small'; close.textContent = 'סגירה ✕'; close.style.float = 'left';
   close.addEventListener('click', () => { v.hidden = true; }); v.append(close);
+  if (isRemoved(it)) return showRemoved(v, it, archive.removed.get(it.txid));
   const m = it.metadata, multi = it.kind === 'multipart';
   const h = document.createElement('h3'); h.style.cssText = 'font-family:var(--display);margin:0 0 6px;font-size:1.3rem'; h.textContent = m.title || '(ללא כותרת)';
   const dl = document.createElement('dl'); dl.className = 'ledger';
@@ -912,6 +979,10 @@ async function openItem(it) {
   if (CONFIG.publicPages && it.official && it.time) { const pp = document.createElement('a'); pp.href = `p/${it.txid}.html`; pp.target = '_blank'; pp.rel = 'noopener'; pp.textContent = 'דף פרסום קבוע'; links.append(pp); }
   if (NET.ordinals) { const oa = document.createElement('a'); oa.href = `${NET.ordinals}/inscription/${it.txid}i0`; oa.target = '_blank'; oa.rel = 'noopener'; oa.textContent = 'ב-ordinals.com'; links.append(oa); }
   v.append(links);
+  if (it.official && isDocument(it)) {
+    const rb = document.createElement('button'); rb.type = 'button'; rb.className = 'btn ghost small'; rb.textContent = 'הסרת המסמך שלי'; rb.style.marginTop = '10px';
+    rb.addEventListener('click', () => { rb.remove(); showRemoveBox(v, it, links); }); v.append(rb);
+  }
   if (/^text\//.test(type || '') && !/html/.test(type)) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = dec.decode(content); v.append(pre); }
   else if (isOffice(type)) {
     let txt = null; try { txt = await officeText(content); } catch {}
@@ -921,6 +992,54 @@ async function openItem(it) {
     if (txt) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = txt; v.append(pre); }
   }
   else if (/^application\/pdf/.test(type || '')) { const f = document.createElement('iframe'); f.src = url; f.title = m.title || 'PDF'; v.append(f); }
+}
+function showRemoved(v, it, r) {
+  const h = document.createElement('h3'); h.style.cssText = 'font-family:var(--display);margin:0 0 6px;font-size:1.3rem'; h.textContent = 'מסמך שהוסר מהתצוגה';
+  const p = document.createElement('p'); p.style.margin = '0 0 10px'; p.textContent = removedWhy(r) + '. המסמך נשאר רשום בבלוקצ\'יין, אבל האתר אינו מציג את הכותרת, התיאור והתוכן שלו. הפרטים שלמטה נשארים כדי שאפשר יהיה לאמת שמסמך עם טביעת האצבע הזו פורסם במועד הזה.';
+  const dl = document.createElement('dl'); dl.className = 'ledger';
+  const rows = [['מזהה המסמך', it.txid + 'i0', true], ['טביעת אצבע', it.metadata.sha256 || it.docSha, true], ['נרשם', fmtDate(it.time)]];
+  if (r.request) rows.push(['בקשת ההסרה', r.request, true], ['הוכחת בעלות', r.proof === 'key' ? 'חתימה במפתח הרישום (קובץ השחזור)' : 'חתימה של הארנק ששילם על הרישום']);
+  for (const [k, val, mono] of rows) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = val; if (mono) dd.className = 'mono'; dl.append(dt, dd); }
+  v.append(h, p, dl);
+  v.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
+}
+// The publisher removes their own document: prove ownership, then pay for a small signed request
+// that is registered in the archive like any document.
+function showRemoveBox(v, it, after) {
+  const box = document.createElement('div'); box.className = 'banner info'; box.style.marginTop = '12px';
+  const probe = E.createPlan(E.makeWithdrawDoc({ networkName: CONFIG.network, targetTxid: it.txid, proof: { type: 'wallet', address: 'x'.repeat(62), sig: 'x'.repeat(88) } }), NET.btc, new Uint8Array(32).fill(9), Math.max(1, Number($('feeRate').value) || 1));
+  box.innerHTML = '<strong>הסרת המסמך מהתצוגה</strong><p style="margin:6px 0">רק המפרסם יכול לבקש זאת, ולכן צריך להוכיח בעלות. המסמך יישאר רשום בבלוקצ\'יין, ובאתר יישאר דף עם התאריך וטביעת האצבע בלבד. הבקשה עצמה נרשמת בבלוקצ\'יין, ועולה כ-<span class="cost"></span>.</p>'
+    + '<div class="row"><label class="filebtn">הוכחה עם קובץ השחזור של המסמך<input type="file" accept=".json,application/json" hidden></label><button type="button" class="btn ghost small wallet">הוכחה עם הארנק ששילם (UniSat)</button></div><p class="err" style="margin-top:8px"></p>';
+  box.querySelector('.cost').textContent = fmtSats(probe.total);
+  const err = box.querySelector('.err');
+  const go = (proof) => {
+    const plan = E.createPlan(E.makeWithdrawDoc({ networkName: CONFIG.network, targetTxid: it.txid, proof }), NET.btc, E.newSecret(), Math.max(1, Number($('feeRate').value) || 1));
+    showTab('register'); startPayment(plan, '');
+  };
+  box.querySelector('input').addEventListener('change', async (e) => {
+    err.textContent = ''; const f = e.target.files[0]; if (!f) return;
+    try {
+      const r = JSON.parse(await f.text());
+      if (r.network !== CONFIG.network) throw new Error(`הקובץ שייך לרשת ${r.network}.`);
+      const { plan } = E.importRecovery(r);
+      if (!E.ownsTarget(plan, it.witness)) throw new Error('קובץ השחזור הזה שייך למסמך אחר.');
+      go({ type: 'key', sig: E.signWithdrawWithKey(plan, CONFIG.network, it.txid) });
+    } catch (x) { err.textContent = 'לא ניתן להשתמש בקובץ: ' + x.message; }
+  });
+  box.querySelector('.wallet').addEventListener('click', async () => {
+    err.textContent = '';
+    if (!window.unisat) { err.textContent = 'לא נמצא ארנק UniSat בדפדפן הזה. פתחו את הדף בדפדפן שבו מותקן הארנק ששילם, או השתמשו בקובץ השחזור.'; return; }
+    try {
+      const [addr] = await window.unisat.requestAccounts();
+      const payers = await payersOf(it);
+      if (!payers.includes(addr)) { err.textContent = `הארנק המחובר (${addr}) לא שילם על הרישום הזה. התשלום הגיע מ: ${payers.join(', ') || 'כתובת לא ידועה'}. החליפו חשבון ב-UniSat ונסו שוב.`; return; }
+      const msg = E.withdrawMessage(CONFIG.network, it.txid);
+      const sig = await window.unisat.signMessage(msg);
+      if (!E.signerAddresses(msg, sig, NET.btc).includes(addr)) { err.textContent = 'החתימה שהארנק החזיר אינה תואמת לכתובת שלו.'; return; }
+      go({ type: 'wallet', address: addr, sig });
+    } catch (x) { err.textContent = 'הארנק לא אישר את החתימה: ' + String(x && x.message || x).slice(0, 140); }
+  });
+  after.after(box);
 }
 $('search').addEventListener('input', () => renderArchive(online === false));
 $('showExternal').addEventListener('change', () => renderArchive(online === false));
@@ -943,16 +1062,16 @@ $('verifyBtn').addEventListener('click', async () => {
   if (!bytes) return result(out, 'bad', 'בחרו קובץ או הדביקו טקסט.');
   const hash = E.sha256Hex(bytes); $('vHash').textContent = hash;
   const txid = $('vTxid').value.trim().toLowerCase().replace(/i\d+$/, '');
-  const label = (it) => `"${it.metadata.title || ''}"${it.time ? ', נרשם ב-' + fmtDate(it.time) : ''}${it.official ? '' : ' (רישום חיצוני, לא נוצר דרך ארכיב)'}`;
+  const label = (it) => isRemoved(it) ? `${it.txid.slice(0, 12)}…, נרשם ב-${fmtDate(it.time)}. ${removedWhy(archive.removed.get(it.txid))}, ולכן תוכנו לא מוצג` : `"${it.metadata.title || ''}"${it.time ? ', נרשם ב-' + fmtDate(it.time) : ''}${it.official ? '' : ' (רישום חיצוני, לא נוצר דרך ארכיב)'}`;
   try {
     if (txid) {
       if (!/^[0-9a-f]{64}$/.test(txid)) return result(out, 'bad', 'המזהה צריך להיות 64 תווים הקסדצימליים, אפשר עם i0 בסוף.');
       const it = await getPart(txid);
-      if (!it || it.kind === 'part') return result(out, 'bad', 'בעסקה הזו אין מסמך רשום.');
+      if (!it || !isDocument(it)) return result(out, 'bad', 'בעסקה הזו אין מסמך רשום.');
       return (await confirmItem(it, hash)) ? result(out, 'ok', `תואם. המסמך זהה לרישום ${label(it)}.`) : result(out, 'bad', 'לא תואם. הקובץ שונה מהמסמך שנרשם, ולו בתו אחד.');
     }
     if (!archive.loaded) await loadArchive();
-    const hit = archive.items.find((i) => i.kind !== 'part' && i.docSha === hash);
+    const hit = archive.items.find((i) => isDocument(i) && i.docSha === hash);
     if (hit && await confirmItem(hit, hash)) return result(out, 'ok', `נמצא בארכיון: ${label(hit)}.`);
     result(out, 'bad', online === false ? 'אין גישה לרשת מכאן. טביעת האצבע למעלה מאפשרת להשוות ידנית מול רישום ב-explorer.' : 'המסמך הזה לא נמצא בארכיון.');
   } catch (e) { result(out, 'bad', online === false ? 'אין גישה לרשת מכאן. השוו את טביעת האצבע למעלה ידנית.' : 'הבדיקה נכשלה: ' + String(e.message).slice(0, 120)); }

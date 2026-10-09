@@ -23,7 +23,7 @@ const RAW_SITE = process.env.SITE_URL || config.siteUrl || '';
 const SITE = RAW_SITE ? RAW_SITE.replace(/\/?$/, '/') : '';
 const SITE_NAME = config.siteName || 'ארכיב';
 const ARCHIVE = E.archiveAddress(NET.btc);
-const HIDDEN = new Set(config.hiddenTxids || []);
+const OPERATOR_HIDDEN = E.operatorHidden(config);
 const MAX_DECOMPRESSED = 64 * 1024 * 1024;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -61,15 +61,48 @@ function parseTx(tx) {
 }
 const decode = (body, enc) => enc === 'gzip' ? new Uint8Array(gunzipSync(body, { maxOutputLength: MAX_DECOMPRESSED })) : body;
 
+// Addresses that paid for a registration: walk back from its final transaction to the payment.
+async function payersOf(tx, meta, byTxid) {
+  let cur = tx;
+  for (let i = 0; i < E.paymentDepth(meta); i++) {
+    const id = cur && cur.vin && cur.vin[0] && cur.vin[0].txid; if (!id) return [];
+    cur = byTxid.get(id) || await get('/tx/' + id);
+  }
+  return ((cur && cur.vin) || []).map((v) => v.prevout && v.prevout.scriptpubkey_address).filter(Boolean);
+}
+
+// Which documents are removed from display, by whom and why.
+async function removals(txs, byTxid) {
+  const removed = new Map(), rejected = [];
+  for (const [txid, h] of OPERATOR_HIDDEN) removed.set(txid, { by: 'operator', reason: h.reason, date: h.date });
+  // Oldest first, so the first valid request for a document is the one recorded.
+  for (const tx of [...txs].reverse()) {
+    const p = parseTx(tx), m = p && p.metadata;
+    if (!m || m.app !== E.ARCHIVE_TAG || m.kind !== 'withdraw') continue;
+    const target = byTxid.get(m.target), tp = target && parseTx(target);
+    if (!tp || tp.metadata.app !== E.ARCHIVE_TAG || ['part', 'withdraw'].includes(tp.metadata.kind)) { rejected.push([tx.txid, 'withdraw: unknown target']); continue; }
+    if (removed.has(m.target) && removed.get(m.target).by === 'publisher') continue;
+    const payers = m.proof && m.proof.type === 'wallet' ? await payersOf(target, tp.metadata, byTxid) : [];
+    if (!E.verifyWithdrawal(m, { txid: target.txid, witness: target.vin[0].witness }, config.network, NET.btc, payers)) { rejected.push([tx.txid, 'withdraw: proof does not match the publisher']); continue; }
+    removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: tx.txid, time: tx.status.block_time, reason: '' });
+  }
+  return { removed, rejected };
+}
+
 async function collect() {
   const txs = await listConfirmed();
   const byTxid = new Map(txs.map((t) => [t.txid, t]));
-  const items = [], skipped = [];
+  const items = [], skipped = [], gone = [];
+  const { removed, rejected } = await removals(txs, byTxid);
+  skipped.push(...rejected);
   for (const tx of txs) {
     const p = parseTx(tx); if (!p) continue;
     const m = p.metadata || {};
-    if (m.app !== E.ARCHIVE_TAG || m.kind === 'part') continue;
-    if (HIDDEN.has(tx.txid)) { skipped.push([tx.txid, 'hidden']); continue; }
+    if (m.app !== E.ARCHIVE_TAG || m.kind === 'part' || m.kind === 'withdraw') continue;
+    if (removed.has(tx.txid)) {
+      gone.push({ txid: tx.txid, time: tx.status.block_time, height: tx.status.block_height, sha256: m.sha256, ...removed.get(tx.txid) });
+      skipped.push([tx.txid, 'removed by ' + removed.get(tx.txid).by]); continue;
+    }
     try {
       let content, type = p.contentType;
       if (m.kind === 'multipart') {
@@ -89,7 +122,8 @@ async function collect() {
     } catch (e) { skipped.push([tx.txid, e.message]); }
   }
   items.sort((a, b) => b.time - a.time || (a.txid < b.txid ? -1 : 1));
-  return { items, skipped, total: txs.length };
+  gone.sort((a, b) => b.time - a.time);
+  return { items, gone, skipped, total: txs.length };
 }
 
 // ---------- pages ----------
@@ -193,6 +227,34 @@ ${preview}
   return shell({ title: `${title} · ${SITE_NAME}`, head, body });
 }
 
+// A removed document keeps a permanent page with its date and fingerprint, so the fact that it was
+// published at that time stays verifiable. Its title, description and content are not shown.
+const removedWhy = (g) => g.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (g.time ? ` ב-${heDate(g.time)}` : '') : 'הוסתר על ידי מפעיל האתר' + (g.date ? ` ב-${g.date}` : '') + (g.reason ? `. הסיבה: ${g.reason}` : '');
+function removedPage(g) {
+  const id = g.txid + 'i0';
+  const body = `<article>
+<h1>מסמך שהוסר מהתצוגה</h1>
+<p class="lead">${esc(removedWhy(g))}.</p>
+<p>המסמך נשאר רשום בבלוקצ'יין, ואי אפשר למחוק אותו משם. האתר הזה אינו מציג את הכותרת, התיאור והתוכן שלו. הפרטים שלמטה נשארים כדי שאפשר יהיה לאמת שמסמך עם טביעת האצבע הזו פורסם במועד הזה.</p>
+<dl>
+<dt>מזהה הפרסום</dt><dd class="mono">${esc(id)}</dd>
+<dt>תאריך פרסום (UTC)</dt><dd class="mono">${esc(iso(g.time))}</dd>
+<dt>בלוק</dt><dd class="mono">${g.height}</dd>
+<dt>טביעת אצבע (SHA-256)</dt><dd class="mono">${esc(g.sha256 || '')}</dd>
+${g.request ? `<dt>בקשת ההסרה</dt><dd><a class="mono" href="${NET.explorer}/tx/${g.request}" rel="noopener">${esc(g.request)}</a> (${g.proof === 'key' ? 'נחתמה במפתח הרישום' : 'נחתמה בארנק ששילם על הרישום'})</dd>` : ''}
+</dl>
+<div class="links"><a href="removed.html">יומן ההסרות</a><a href="${NET.explorer}/tx/${g.txid}" rel="noopener">העסקה ב-mempool.space</a></div>
+</article>`;
+  return shell({ title: `מסמך שהוסר · ${SITE_NAME}`, head: '<meta name="robots" content="noindex">', body });
+}
+function removedLog(gone) {
+  const rows = gone.map((g) => `<li><a class="mono" href="${g.txid}.html">${g.txid.slice(0, 16)}…</a>
+<div class="meta">פורסם ב-${esc(heDate(g.time))} · ${esc(removedWhy(g))}</div></li>`).join('\n');
+  const body = `<h1>יומן ההסרות</h1><p class="lead">מסמכים שהאתר הזה אינו מציג עוד, ומי החליט על כך. מפרסם יכול להסיר מסמך שלו בבקשה חתומה, שנרשמת בעצמה בבלוקצ'יין. מפעיל האתר יכול להסתיר מסמך רק עם סיבה כתובה, שמופיעה כאן.</p>
+<ul class="list">${rows || '<li>לא הוסרו מסמכים.</li>'}</ul>`;
+  return shell({ title: `יומן ההסרות · ${SITE_NAME}`, head: '<meta name="robots" content="noindex">', body });
+}
+
 function listPage(items) {
   const rows = items.map((it) => {
     const m = it.meta;
@@ -206,6 +268,7 @@ function listPage(items) {
 ${cats.length ? `<select id="cat" aria-label="סוג המסמך"><option value="">כל הסוגים</option>${cats.map((c) => `<option>${esc(c)}</option>`).join('')}</select>` : ''}</div>
 <p class="meta" id="count" aria-live="polite"></p>
 <ul class="list" id="list">${rows || '<li>עדיין אין פרסומים.</li>'}</ul>
+<p class="meta" style="margin-top:14px"><a href="removed.html">יומן ההסרות</a>: מסמכים שאינם מוצגים עוד, ומי החליט על כך.</p>
 <script>(function(){var q=document.getElementById('q'),c=document.getElementById('cat'),n=document.getElementById('count'),li=[].slice.call(document.querySelectorAll('#list li[data-s]'));
 function run(){var w=q.value.trim().toLowerCase().split(/\\s+/).filter(Boolean),k=c?c.value.toLowerCase():'',shown=0;li.forEach(function(x){var s=x.getAttribute('data-s'),ok=w.every(function(t){return s.indexOf(t)>=0})&&(!k||s.indexOf(k)>=0);x.hidden=!ok;if(ok)shown++});n.textContent=(w.length||k)?(shown?shown+' תוצאות':'אין תוצאות'):'';try{history.replaceState(null,'',q.value?'#q='+encodeURIComponent(q.value):location.pathname)}catch(e){}}
 var m=location.hash.match(/^#q=(.*)$/);if(m)q.value=decodeURIComponent(m[1]);q.addEventListener('input',run);if(c)c.addEventListener('change',run);run();})();</script>`;
@@ -213,7 +276,7 @@ var m=location.hash.match(/^#q=(.*)$/);if(m)q.value=decodeURIComponent(m[1]);q.a
 }
 
 // ---------- main ----------
-const { items, skipped, total } = await collect();
+const { items, gone, skipped, total } = await collect();
 const P = new URL('p/', OUT);
 rmSync(P, { recursive: true, force: true });
 mkdirSync(P, { recursive: true });
@@ -222,16 +285,19 @@ for (const it of items) {
   const ext = fileExt(it.type);
   if (ext) writeFileSync(new URL(`${it.txid}.${ext}`, P), it.content);
 }
+for (const g of gone) writeFileSync(new URL(`${g.txid}.html`, P), removedPage(g));
+writeFileSync(new URL('removed.html', P), removedLog(gone));
 writeFileSync(new URL('index.html', P), listPage(items));
 writeFileSync(new URL('index.json', P), JSON.stringify({
   archive: ARCHIVE, network: config.network, generated: new Date().toISOString(),
   publications: items.map((it) => ({ id: it.txid + 'i0', txid: it.txid, title: it.meta.title || '', publisher: it.meta.publisher || '', category: it.meta.category || '', abstract: it.meta.abstract || '', keywords: it.meta.keywords || '',
     published: iso(it.time), block: it.height, sha256: it.meta.sha256, size: it.content.length, contentType: it.type, parts: it.parts, page: `p/${it.txid}.html` })),
+  removed: gone.map((g) => ({ id: g.txid + 'i0', txid: g.txid, published: iso(g.time), block: g.height, sha256: g.sha256, by: g.by, reason: g.reason || '', request: g.request || null })),
 }, null, 1));
 if (SITE) {
   const urls = [`${SITE}`, `${SITE}p/`, ...items.map((it) => `${SITE}p/${it.txid}.html`), ...items.filter((it) => fileExt(it.type) === 'pdf').map((it) => `${SITE}p/${it.txid}.pdf`)];
   writeFileSync(new URL('sitemap.xml', OUT), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `<url><loc>${esc(u)}</loc></url>`).join('\n')}\n</urlset>\n`);
   writeFileSync(new URL('robots.txt', OUT), `User-agent: *\nAllow: /\nSitemap: ${SITE}sitemap.xml\n`);
 }
-console.log(`archive ${ARCHIVE}: ${total} confirmed transactions, ${items.length} publications${skipped.length ? `, ${skipped.length} skipped` : ''}`);
+console.log(`archive ${ARCHIVE}: ${total} confirmed transactions, ${items.length} publications, ${gone.length} removed${skipped.length ? `, ${skipped.length} skipped` : ''}`);
 for (const [t, why] of skipped) console.log(`  skipped ${t}: ${why}`);

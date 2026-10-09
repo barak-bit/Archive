@@ -123,4 +123,47 @@ assert.throws(() => E.makeDoc({ stored: new Uint8Array(E.MAX_DOC + 1), contentTy
 assert.equal(E.partCount({ stored: new Uint8Array(E.MAX_PART) }), 1);
 assert.equal(E.partCount({ stored: new Uint8Array(E.MAX_PART + 1) }), 2);
 
+// 9. removal by the publisher
+{
+  const doc = docFrom(utf8.decode('uploaded by mistake'), 'text/plain;charset=utf-8', 'oops', '', false);
+  const plan = E.createPlan(doc, net, E.newSecret(), 1);
+  const out = E.buildTransactions(plan, { txid: 'cd'.repeat(32), vout: 0, value: Number(plan.total) });
+  const target = { txid: out.txs[0].txid, witness: witnessHex(parse(out.txs[0].hex)) };
+  assert.ok(E.ownsTarget(E.importRecovery(E.exportRecovery(plan, 'testnet4')).plan, target.witness), 'recovery file owns its document');
+  const otherPlan = E.createPlan(doc, net, E.newSecret(), 1);
+  assert.ok(!E.ownsTarget(otherPlan, target.witness), 'another secret does not');
+  const keyMeta = (sig) => ({ app: E.ARCHIVE_TAG, kind: 'withdraw', network: 'testnet4', target: target.txid, proof: { type: 'key', sig } });
+  assert.ok(E.verifyWithdrawal(keyMeta(E.signWithdrawWithKey(plan, 'testnet4', target.txid)), target, 'testnet4', net));
+  assert.ok(!E.verifyWithdrawal(keyMeta(E.signWithdrawWithKey(otherPlan, 'testnet4', target.txid)), target, 'testnet4', net), 'wrong key');
+  assert.ok(!E.verifyWithdrawal({ ...keyMeta(E.signWithdrawWithKey(plan, 'testnet4', target.txid)), network: 'mainnet' }, target, 'testnet4', net), 'wrong network');
+  const sigOther = E.signWithdrawWithKey(plan, 'testnet4', 'ab'.repeat(32));
+  assert.ok(!E.verifyWithdrawal(keyMeta(sigOther), target, 'testnet4', net), 'signature for another document');
+  // wallet proof
+  const wk = new Uint8Array(32).fill(3), { secp256k1 } = await import('@noble/curves/secp256k1.js');
+  const payer = btc.p2wpkh(secp256k1.getPublicKey(wk, true), net).address;
+  const wsig = E.signMessageForTest(E.withdrawMessage('testnet4', target.txid), wk);
+  const walletMeta = { app: E.ARCHIVE_TAG, kind: 'withdraw', network: 'testnet4', target: target.txid, proof: { type: 'wallet', address: payer, sig: wsig } };
+  assert.ok(E.verifyWithdrawal(walletMeta, target, 'testnet4', net, [payer]));
+  assert.ok(!E.verifyWithdrawal(walletMeta, target, 'testnet4', net, ['tb1qother']), 'signer did not pay');
+  assert.ok(!E.verifyWithdrawal({ ...walletMeta, proof: { ...walletMeta.proof, address: 'tb1qother' } }, target, 'testnet4', net, ['tb1qother']), 'claimed address is not the signer');
+  // multipart: the index reveal's key is the owner key
+  const big = new Uint8Array(randomBytes(400_000));
+  const mdoc = E.makeDoc({ stored: big, contentType: 'application/octet-stream', sha256: E.sha256Hex(big), size: big.length });
+  const mplan = E.createPlan(mdoc, net, E.newSecret(), 1);
+  const mout = E.buildTransactions(mplan, { txid: 'ef'.repeat(32), vout: 0, value: Number(mplan.total) });
+  assert.ok(E.ownsTarget(mplan, witnessHex(parse(mout.txs.at(-1).hex))), 'multipart owner key');
+  // the withdraw record itself round-trips through a recovery file
+  const wd = E.makeWithdrawDoc({ networkName: 'testnet4', targetTxid: target.txid, proof: walletMeta.proof });
+  const wplan = E.createPlan(wd, net, E.newSecret(), 1);
+  const back = E.importRecovery(E.exportRecovery(wplan, 'testnet4')).plan;
+  assert.equal(back.payAddress, wplan.payAddress);
+  const wtx = E.buildTransactions(wplan, { txid: '12'.repeat(32), vout: 0, value: Number(wplan.total) });
+  const wm = E.parseWitnessHex(witnessHex(parse(wtx.txs[0].hex))).metadata;
+  assert.equal(wm.kind, 'withdraw'); assert.equal(wm.target, target.txid); assert.ok(E.verifyWithdrawal(wm, target, 'testnet4', net, [payer]));
+  console.log('withdraw: key + wallet proofs ok, cost', wplan.total, 'sats at 1 sat/vB');
+  // operator list
+  const oh = E.operatorHidden({ hiddenTxids: ['aa'.repeat(32), 'bad'], hidden: [{ txid: 'bb'.repeat(32), reason: 'r', date: 'd' }, { txid: 'nope' }] });
+  assert.deepEqual([...oh.keys()], ['aa'.repeat(32), 'bb'.repeat(32)]);
+}
+
 console.log('ALL ENGINE TESTS PASSED');

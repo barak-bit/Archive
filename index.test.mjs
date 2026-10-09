@@ -13,7 +13,7 @@ const server = await serve(chain);
 const out = mkdtempSync(join(tmpdir(), 'archiv-index-'));
 const cfgPath = join(out, 'config.json');
 const cfg = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
-writeFileSync(cfgPath, JSON.stringify({ ...cfg, network: 'testnet4', hiddenTxids: [chain.named.hidden] }));
+writeFileSync(cfgPath, JSON.stringify({ ...cfg, network: 'testnet4', hiddenTxids: [], hidden: [{ txid: chain.named.hidden, reason: 'צו שיפוטי לדוגמה', date: '2026-10-09' }] }));
 try {
   const { stdout: log } = await promisify(execFile)('node', [new URL('./build-index.mjs', import.meta.url).pathname], {
     env: { ...process.env, ARCHIV_API: `http://127.0.0.1:${server.address().port}`, OUT_DIR: out, SITE_URL: 'https://example.github.io/archiv', CONFIG_PATH: cfgPath },
@@ -22,10 +22,29 @@ try {
   const P = (f) => join(out, 'p', f);
   const json = JSON.parse(readFileSync(P('index.json'), 'utf8'));
   const ids = json.publications.map((p) => p.txid);
-  // 22 fillers + text + gzip + multipart + html = 26; external, hidden and tampered are left out
+  // 22 fillers + text + gzip + multipart + html = 26; external, tampered, hidden and withdrawn are left out
   assert.equal(json.publications.length, 26, 'publication count');
   for (const k of ['text', 'gzip', 'multipart', 'html']) assert.ok(ids.includes(chain.named[k]), k + ' listed');
-  for (const k of ['external', 'hidden', 'tampered']) assert.ok(!ids.includes(chain.named[k]), k + ' excluded');
+  for (const k of ['external', 'hidden', 'tampered', 'withdrawnKey', 'withdrawnWallet', 'withdrawnMulti', 'wdKey', 'wdWallet']) assert.ok(!ids.includes(chain.named[k]), k + ' excluded');
+  // removals: three by the publisher (key, wallet, wallet on a multipart document), one by the operator with its reason
+  const rem = new Map(json.removed.map((r) => [r.txid, r]));
+  assert.equal(json.removed.length, 4, 'removed count');
+  assert.equal(rem.get(chain.named.withdrawnKey).by, 'publisher');
+  assert.equal(rem.get(chain.named.withdrawnWallet).by, 'publisher');
+  assert.equal(rem.get(chain.named.withdrawnMulti).by, 'publisher');
+  assert.equal(rem.get(chain.named.wdKey) , undefined);
+  assert.equal(rem.get(chain.named.hidden).by, 'operator');
+  assert.equal(rem.get(chain.named.hidden).reason, 'צו שיפוטי לדוגמה');
+  // forged requests change nothing: the solar-clamp text stays published
+  assert.equal((log.match(/proof does not match the publisher/g) || []).length, 2, 'two forged requests rejected');
+  // stub page keeps date and fingerprint, never the title or content
+  const stub = readFileSync(P(chain.named.withdrawnKey + '.html'), 'utf8');
+  assert.ok(stub.includes('הוסר מהתצוגה לבקשת המפרסם') && stub.includes('נחתמה במפתח הרישום') && !stub.includes('הועלה בטעות') && !stub.includes('uploaded by mistake'));
+  assert.ok(readFileSync(P(chain.named.withdrawnWallet + '.html'), 'utf8').includes('נחתמה בארנק ששילם'));
+  assert.ok(readFileSync(P(chain.named.hidden + '.html'), 'utf8').includes('הסיבה: צו שיפוטי לדוגמה'));
+  assert.ok(!existsSync(P(chain.named.withdrawnKey + '.txt')), 'no content file for a removed document');
+  const log2 = readFileSync(P('removed.html'), 'utf8');
+  assert.equal((log2.match(/<li>/g) || []).length, 4);
   assert.match(log, /fingerprint mismatch/);
   // multipart PDF reassembled byte for byte, and published
   const pdf = readFileSync(P(chain.named.multipart + '.pdf'));

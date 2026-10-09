@@ -3,7 +3,7 @@
   "siteName": "ארכיב",
   "siteUrl": "",
   "reportEmail": "report@example.com",
-  "hiddenTxids": ["5b04d185413859dfd294dc6f9f48db40df18c7064617da266f84ed00db611bc9"],
+  "hidden": [],
   "publicPages": true,
   "cardPayment": {
     "label": "MoonPay",
