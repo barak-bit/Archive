@@ -53,7 +53,8 @@ header.top { padding-block: 28px 18px; display: flex; flex-wrap: wrap; align-ite
 .pill.test { background: var(--warn-soft); color: var(--warn); }
 .pill.main { background: var(--ok-soft); color: var(--ok); }
 
-nav.tabs { display: flex; gap: 4px; margin-block: 20px 24px; border-bottom: 1px solid var(--rule); overflow-x: auto; }
+nav.tabs { display: flex; gap: 4px; margin-block: 20px 24px; border-bottom: 1px solid var(--rule); overflow-x: auto; scrollbar-width: none; }
+nav.tabs::-webkit-scrollbar { display: none; }
 nav.tabs button { font: inherit; font-weight: 600; background: none; border: 0; color: var(--muted); padding: 10px 14px; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 nav.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 nav.tabs button:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -516,7 +517,9 @@ function startPayment(plan, refund) {
   $('payAddr').textContent = plan.payAddress;
   $('payLink').href = `bitcoin:${plan.payAddress}?amount=${btcStr(plan.total)}`;
   $('mValue').value = Number(plan.total);
-  $('unisatBtn').hidden = !window.unisat;
+  // Wallet extensions inject window.unisat a moment after the page loads, so keep checking.
+  const checkUnisat = () => { $('unisatBtn').hidden = !window.unisat; return !!window.unisat; };
+  if (!checkUnisat()) { let n = 0; const iv = setInterval(() => { if (checkUnisat() || ++n > 20) clearInterval(iv); }, 500); }
   $('cardBtn').hidden = !(CONFIG.cardPayment.urlTemplate && CONFIG.network === 'mainnet');
   if (!$('cardBtn').hidden) $('cardBtn').textContent = `תשלום בכרטיס אשראי (${CONFIG.cardPayment.label})`;
   setStatus($('payStatus'), '', 'ממתין לתשלום…');
@@ -603,7 +606,13 @@ function renderTxList(manual) {
   });
 }
 function markTx(i, kind, text) { const st = $('tx-' + i)?.querySelector('.st'); if (st) { st.className = 'st ' + (kind || ''); st.textContent = text; } }
-async function txStatus(txid) { try { return await api(`/tx/${txid}/status`); } catch (e) { if (e.http === 404 || e.http === 400) return null; throw e; } }
+// Returns the tx status if the network knows the transaction, or null if it doesn't.
+// Uses /tx/:txid (404 when unknown). /tx/:txid/status is not usable for this: mempool.space
+// answers {"confirmed":false} with HTTP 200 even for transactions it has never seen.
+async function txStatus(txid) {
+  try { const tx = await api(`/tx/${txid}`); return tx && tx.txid ? (tx.status || { confirmed: false }) : null; }
+  catch (e) { if (e.http === 404 || e.http === 400) return null; throw e; }
+}
 
 async function publish(utxo) {
   $('s4').classList.remove('locked'); $('revealArea').hidden = false; $('doneArea').hidden = true; $('retryBtn').hidden = true; $('manualNote').hidden = true;
