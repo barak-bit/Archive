@@ -50,7 +50,7 @@ function external(text) {
 }
 
 export function buildChain() {
-  const named = {};
+  const named = {}, issues = [];
   const regs = [];
   const add = (name, txs) => { named[name] = txs[txs.length - 1].id; regs.push(txs); };
   for (let i = 1; i <= 22; i++) add('filler' + i, register(makeDoc(utf8.decode(`פרסום מספר ${i}: תיאור קצר של המצאה לדוגמה.`), 'text/plain;charset=utf-8', `פרסום לדוגמה ${i}`)));
@@ -75,6 +75,20 @@ export function buildChain() {
   add('wdKey', withdraw(byKey, { type: 'key', sig: E.signWithdrawWithKey(byKey.plan, 'testnet4', lastId(byKey)) }));
   add('wdWallet', withdraw(byWallet, { type: 'wallet', address: PAYER, sig: sigFor(byWallet) }));
   add('wdMulti', withdraw(multiW, { type: 'wallet', address: PAYER, sig: sigFor(multiW) }));
+  // GitHub requests: hidden by the operator's label, removed by the publisher's free signed request, and noise.
+  const ghHidden = register(makeDoc(utf8.decode('defamatory text'), 'text/plain;charset=utf-8', 'פוגעני'));
+  add('ghHidden', ghHidden);
+  const ghWithdrawn = register(makeDoc(utf8.decode('uploaded by mistake (free request)'), 'text/plain;charset=utf-8', 'הועלה בטעות 4'));
+  add('ghWithdrawn', ghWithdrawn);
+  const otherForGh = register(makeDoc(utf8.decode('y'), 'text/plain;charset=utf-8', 'y'));
+  const at = (d) => `2026-10-0${d}T10:00:00Z`;
+  issues.push(
+    { number: 1, title: 'לשון הרע (צו שיפוטי)', body: `המסמך ${lastId(ghHidden)}i0`, labels: [{ name: 'הסתרה' }], created_at: at(1), html_url: 'https://github.com/test/repo/issues/1' },
+    { number: 2, title: 'תלונה שעדיין לא טופלה', body: `המסמך ${lastId(textReg)}i0`, labels: [], created_at: at(2), html_url: 'https://github.com/test/repo/issues/2' },
+    { number: 3, title: 'בקשת הסרה', body: E.removalRequestText('testnet4', lastId(ghWithdrawn), { type: 'key', sig: E.signWithdrawWithKey(ghWithdrawn.plan, 'testnet4', lastId(ghWithdrawn)) }), labels: [], created_at: at(3), html_url: 'https://github.com/test/repo/issues/3' },
+    { number: 4, title: 'בקשת הסרה מזויפת', body: E.removalRequestText('testnet4', lastId(textReg), { type: 'key', sig: E.signWithdrawWithKey(otherForGh.plan, 'testnet4', lastId(textReg)) }), labels: [], created_at: at(4), html_url: 'https://github.com/test/repo/issues/4' },
+    { number: 5, title: 'הסתרה של משהו שאינו מסמך', body: 'ab'.repeat(32), labels: [{ name: 'הסתרה' }], created_at: at(5), html_url: 'https://github.com/test/repo/issues/5' },
+  );
   // Forged requests against the solar-clamp text: someone else's key, and a wallet that did not pay.
   const other = register(makeDoc(utf8.decode('x'), 'text/plain;charset=utf-8', 'x'));
   const textTarget = textReg;
@@ -91,7 +105,7 @@ export function buildChain() {
     status: { confirmed: true, block_height: 120000 + r, block_time: 1790000000 + r * 600 },
   })));
   txs.reverse();
-  return { txs, named, pdf, textBody, side };
+  return { txs, named, pdf, textBody, side, issues, ghWrites: [] };
 }
 
 export function serve(chain, port = 0) {
@@ -100,6 +114,13 @@ export function serve(chain, port = 0) {
     const send = (code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); res.end(typeof body === 'string' ? body : JSON.stringify(body)); };
     const u = new URL(req.url, 'http://x').pathname;
     let m;
+    // A minimal GitHub API under /gh: issues (paged), labels, comments, closing.
+    if (u.startsWith('/gh/')) {
+      if (req.method !== 'GET') { let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => { chain.ghWrites.push([req.method, decodeURIComponent(u), b]); send(201, {}); }); return; }
+      if (u === '/gh/repos/test/repo/issues') { const page = Number(new URL(req.url, 'http://x').searchParams.get('page') || 1); return send(200, page === 1 ? chain.issues : []); }
+      if (u.startsWith('/gh/repos/test/repo/labels/')) return send(404, { message: 'Not Found' });
+      return send(404, { message: 'Not Found' });
+    }
     if ((m = u.match(/^\/address\/(\w+)\/txs\/chain(?:\/([0-9a-f]{64}))?$/))) {
       const list = m[1] === ARCHIVE ? chain.txs : [];
       const start = m[2] ? list.findIndex((t) => t.txid === m[2]) + 1 : 0;

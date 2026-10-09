@@ -17,7 +17,7 @@ const engine = bundle.outputFiles[0].text.replace(/<\/script/gi, '<\\/script');
 const src = read('app.html');
 
 function page(cfg) {
-  const appCfg = { network: cfg.network, reportEmail: cfg.reportEmail, hiddenTxids: cfg.hiddenTxids || [], hidden: cfg.hidden || [], publicPages: !!cfg.publicPages, cardPayment: cfg.cardPayment || {} };
+  const appCfg = { network: cfg.network, reportEmail: cfg.reportEmail, hiddenTxids: cfg.hiddenTxids || [], hidden: cfg.hidden || [], repo: process.env.GITHUB_REPOSITORY || cfg.repo || '', publicPages: !!cfg.publicPages, cardPayment: cfg.cardPayment || {} };
   const json = JSON.stringify(appCfg).replace(/</g, '\\u003c');
   return src
     .replace(/\/\*CONFIG\*\/[\s\S]*?\/\*END\*\//, () => json)

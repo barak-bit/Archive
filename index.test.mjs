@@ -16,7 +16,8 @@ const cfg = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), '
 writeFileSync(cfgPath, JSON.stringify({ ...cfg, network: 'testnet4', hiddenTxids: [], hidden: [{ txid: chain.named.hidden, reason: 'צו שיפוטי לדוגמה', date: '2026-10-09' }] }));
 try {
   const { stdout: log } = await promisify(execFile)('node', [new URL('./build-index.mjs', import.meta.url).pathname], {
-    env: { ...process.env, ARCHIV_API: `http://127.0.0.1:${server.address().port}`, OUT_DIR: out, SITE_URL: 'https://example.github.io/archiv', CONFIG_PATH: cfgPath },
+    env: { ...process.env, ARCHIV_API: `http://127.0.0.1:${server.address().port}`, OUT_DIR: out, SITE_URL: 'https://example.github.io/archiv', CONFIG_PATH: cfgPath,
+      GITHUB_REPOSITORY: 'test/repo', GITHUB_API_URL: `http://127.0.0.1:${server.address().port}/gh`, GITHUB_TOKEN: 'test-token' },
   });
   console.log(log.trim());
   const P = (f) => join(out, 'p', f);
@@ -28,7 +29,24 @@ try {
   for (const k of ['external', 'hidden', 'tampered', 'withdrawnKey', 'withdrawnWallet', 'withdrawnMulti', 'wdKey', 'wdWallet']) assert.ok(!ids.includes(chain.named[k]), k + ' excluded');
   // removals: three by the publisher (key, wallet, wallet on a multipart document), one by the operator with its reason
   const rem = new Map(json.removed.map((r) => [r.txid, r]));
-  assert.equal(json.removed.length, 4, 'removed count');
+  assert.equal(json.removed.length, 6, 'removed count');
+  // GitHub: the operator's label hides with the issue title as the reason; a free signed request removes; the rest changes nothing
+  assert.equal(rem.get(chain.named.ghHidden).by, 'operator');
+  assert.equal(rem.get(chain.named.ghHidden).reason, 'לשון הרע (צו שיפוטי)');
+  assert.equal(rem.get(chain.named.ghWithdrawn).by, 'publisher');
+  assert.ok(ids.includes(chain.named.text), 'unlabeled complaint and forged request leave the text published');
+  assert.match(log, /removal request in issue #4: proof does not match/);
+  const writes = chain.ghWrites.map(([m, u]) => m + ' ' + u);
+  assert.equal(writes.filter((w) => w.startsWith('POST /gh/repos/test/repo/labels')).length, 3, 'the three labels are created');
+  assert.ok(writes.includes('POST /gh/repos/test/repo/issues/3/comments') && writes.includes('PATCH /gh/repos/test/repo/issues/3'), 'verified request answered and closed');
+  assert.ok(writes.includes('POST /gh/repos/test/repo/issues/4/comments') && !writes.includes('PATCH /gh/repos/test/repo/issues/4'), 'forged request answered, left open');
+  assert.ok(!writes.some((w) => /issues\/(1|2|5)\//.test(w)), 'operator and plain issues untouched');
+  const rj = JSON.parse(readFileSync(join(out, 'removals.json'), 'utf8'));
+  assert.equal(rj.removed.length, 6);
+  assert.ok(readFileSync(P(chain.named.ghWithdrawn + '.html'), 'utf8').includes('github.com/test/repo/issues/3'));
+  // the stub keeps the document's own publication date, not the removal date
+  const wk = json.removed.find((r) => r.txid === chain.named.withdrawnKey);
+  assert.ok(readFileSync(P(chain.named.withdrawnKey + '.html'), 'utf8').includes(wk.published));
   assert.equal(rem.get(chain.named.withdrawnKey).by, 'publisher');
   assert.equal(rem.get(chain.named.withdrawnWallet).by, 'publisher');
   assert.equal(rem.get(chain.named.withdrawnMulti).by, 'publisher');
@@ -36,7 +54,7 @@ try {
   assert.equal(rem.get(chain.named.hidden).by, 'operator');
   assert.equal(rem.get(chain.named.hidden).reason, 'צו שיפוטי לדוגמה');
   // forged requests change nothing: the solar-clamp text stays published
-  assert.equal((log.match(/proof does not match the publisher/g) || []).length, 2, 'two forged requests rejected');
+  assert.equal((log.match(/proof does not match the publisher/g) || []).length, 3, 'two forged on-chain requests and one forged GitHub request rejected');
   // stub page keeps date and fingerprint, never the title or content
   const stub = readFileSync(P(chain.named.withdrawnKey + '.html'), 'utf8');
   assert.ok(stub.includes('הוסר מהתצוגה לבקשת המפרסם') && stub.includes('נחתמה במפתח הרישום') && !stub.includes('הועלה בטעות') && !stub.includes('uploaded by mistake'));
@@ -44,7 +62,7 @@ try {
   assert.ok(readFileSync(P(chain.named.hidden + '.html'), 'utf8').includes('הסיבה: צו שיפוטי לדוגמה'));
   assert.ok(!existsSync(P(chain.named.withdrawnKey + '.txt')), 'no content file for a removed document');
   const log2 = readFileSync(P('removed.html'), 'utf8');
-  assert.equal((log2.match(/<li>/g) || []).length, 4);
+  assert.equal((log2.match(/<li>/g) || []).length, 6);
   assert.match(log, /fingerprint mismatch/);
   // multipart PDF reassembled byte for byte, and published
   const pdf = readFileSync(P(chain.named.multipart + '.pdf'));

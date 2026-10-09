@@ -81,9 +81,9 @@ textarea.mono, input.mono { font-family: var(--mono); font-size: 0.84rem; }
 .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
 
-button.btn { font: inherit; font-weight: 600; border-radius: var(--r); padding: 9px 16px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
-button.btn.ghost { background: transparent; color: var(--accent); }
-button.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+button.btn, a.btn { display: inline-block; text-decoration: none; line-height: normal; font: inherit; font-weight: 600; border-radius: var(--r); padding: 9px 16px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+button.btn.ghost, a.btn.ghost { background: transparent; color: var(--accent); }
+button.btn.small, a.btn.small { padding: 4px 10px; font-size: 0.85rem; }
 button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 dl.ledger { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0 0 14px; font-size: 0.93rem; }
@@ -168,10 +168,10 @@ a { color: var(--accent); }
   </nav>
 
   <div id="offlineBanner" class="banner info" hidden>
-    אין כאן גישה לרשת הביטקוין, ולכן העמוד עובד במצב ידני: את התשלום מזינים בעצמכם, ואת העסקאות מעתיקים לשידור. כשהאתר מותקן בדומיין שלכם, הכול קורה אוטומטית.
+    האתר לא מצליח להתחבר כרגע לשירות הנתונים של ביטקוין (mempool.space). בדרך כלל זה עומס זמני, והאתר ממשיך לנסות. בינתיים העמוד עובד במצב ידני: את התשלום מזינים בעצמכם, ואת העסקאות מעתיקים לשידור.
   </div>
   <div id="testBanner" class="banner warn">
-    האתר מחובר לרשת הבדיקה של ביטקוין. המטבעות כאן חסרי ערך, ואפשר לקבל אותם בחינם מ-faucet. אל תשלחו לכתובות האלה ביטקוין אמיתי.
+    האתר מחובר לרשת הבדיקה של ביטקוין. המטבעות כאן חסרי ערך, ואפשר לקבל אותם בחינם מ-faucet. אל תשלחו לכתובת הזו ביטקוין אמיתי.
   </div>
 
   <!-- REGISTER -->
@@ -371,7 +371,7 @@ a { color: var(--accent); }
 <script>/*ENGINE*/</script>
 <script>
 // Settings come from config.json and are injected by scripts/build.mjs.
-const CONFIG = /*CONFIG*/{ network: 'testnet4', reportEmail: '', hiddenTxids: [], hidden: [], publicPages: false, cardPayment: { label: '', urlTemplate: '', signEndpoint: '' } }/*END*/;
+const CONFIG = /*CONFIG*/{ network: 'testnet4', reportEmail: '', hiddenTxids: [], hidden: [], repo: '', publicPages: false, cardPayment: { label: '', urlTemplate: '', signEndpoint: '' } }/*END*/;
 
 const E = Engine;
 const NET = E.NETWORKS[CONFIG.network];
@@ -383,16 +383,25 @@ let online = null;
 const S = { doc: null, sizes: null, plan: null, built: null, usd: null, poll: null, docToken: 0, recovery: '', refund: '' };
 
 // ---------- network ----------
+// The public API sometimes refuses bursts of requests or drops one (rate limits, a slow node). A refusal
+// can look like a network failure to the browser, so a request is retried before the site concludes
+// it is offline. Re-sending a transaction is safe: the network answers "already known".
 async function api(path, opts = {}) {
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 15000);
-  try {
-    const r = await fetch(NET.api + path, { ...opts, signal: ctl.signal });
-    const txt = await r.text();
-    setOnline(true);
-    if (!r.ok) throw Object.assign(new Error(txt || ('HTTP ' + r.status)), { http: r.status });
-    try { return JSON.parse(txt); } catch { return txt; }
-  } catch (e) { if (!e.http) setOnline(false); throw e; }
-  finally { clearTimeout(t); }
+  for (let attempt = 0; ; attempt++) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 25000);
+    try {
+      const r = await fetch(NET.api + path, { ...opts, signal: ctl.signal });
+      const txt = await r.text();
+      if ((r.status === 429 || r.status >= 500) && attempt < 3) { await sleep(1500 * (attempt + 1)); continue; }
+      setOnline(true);
+      if (!r.ok) throw Object.assign(new Error(txt || ('HTTP ' + r.status)), { http: r.status });
+      try { return JSON.parse(txt); } catch { return txt; }
+    } catch (e) {
+      if (e.http) throw e;
+      if (attempt < 3) { await sleep(1500 * (attempt + 1)); continue; }
+      setOnline(false); throw e;
+    } finally { clearTimeout(t); }
+  }
 }
 function setOnline(v) { online = v; $('offlineBanner').hidden = v !== false; }
 const FAST = !!window.__archivTestFast; // test hook: shortens waits
@@ -801,9 +810,20 @@ async function payersOf(it) {
 }
 // Documents this site does not show: hidden by the operator (config.json), or withdrawn by their
 // publisher with a signed request registered in the archive. Requests are verified here, in the browser.
+// Removals the site's build already resolved, including requests made through GitHub (removals.json, next to this page).
+let siteRemovals = null;
+async function loadSiteRemovals() {
+  if (siteRemovals) return siteRemovals;
+  siteRemovals = new Map();
+  try {
+    const r = await fetch('removals.json', { cache: 'no-store' });
+    if (r.ok) for (const x of (await r.json()).removed || []) if (/^[0-9a-f]{64}$/.test(x.txid)) siteRemovals.set(x.txid, x);
+  } catch {} // opened as a local file, or not built yet
+  return siteRemovals;
+}
 async function computeRemovals() {
-  const removed = new Map();
-  for (const [t, h] of OPERATOR_HIDDEN) removed.set(t, { by: 'operator', ...h });
+  const removed = new Map(await loadSiteRemovals());
+  for (const [t, h] of OPERATOR_HIDDEN) if (!removed.has(t)) removed.set(t, { by: 'operator', ...h });
   const reqs = archive.items.filter((i) => i.official && i.kind === 'withdraw').sort((a, b) => (a.time || 9e12) - (b.time || 9e12));
   for (const w of reqs) {
     const m = w.metadata;
@@ -817,11 +837,14 @@ async function computeRemovals() {
         w.verified = E.verifyWithdrawal(m, { txid: target.txid, witness: target.witness }, CONFIG.network, NET.btc, payers);
       } catch { continue; } // network trouble: try again on the next load
     }
-    if (w.verified) removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: w.txid, time: w.time });
+    if (w.verified) removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: w.txid, removedAt: w.time, pending: !w.time });
   }
   archive.removed = removed;
 }
-const removedWhy = (r) => r.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (r.time ? ` ב-${fmtDate(r.time)}` : ' (הבקשה ממתינה לאישור בבלוק)') : 'הוסתר על ידי מפעיל האתר' + (r.date ? ` ב-${r.date}` : '') + (r.reason ? `. הסיבה: ${r.reason}` : '');
+// The repository behind this site, for requests: config, or derived from a <user>.github.io/<repo>/ address.
+const REPO = CONFIG.repo || (/\.github\.io$/.test(location.hostname) && location.pathname.split('/')[1] ? location.hostname.split('.')[0] + '/' + location.pathname.split('/')[1] : '');
+const newIssueUrl = (title, body, labels) => `https://github.com/${REPO}/issues/new?` + new URLSearchParams({ title, body, ...(labels ? { labels } : {}) });
+const removedWhy = (r) => r.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (r.pending ? ' (הבקשה ממתינה לאישור בבלוק)' : r.removedAt ? ` ב-${fmtDate(r.removedAt)}` : '') : 'הוסתר על ידי מפעיל האתר' + (r.date ? ` ב-${r.date}` : '') + (r.reason ? `. הסיבה: ${r.reason}` : '');
 async function toItem(tx) {
   const w = tx.vin[0] && tx.vin[0].witness; if (!w) return null;
   let p; try { p = E.parseWitnessHex(w); } catch { p = null; }
@@ -835,7 +858,13 @@ async function toItem(tx) {
   } else if (it.kind === 'multipart') it.docSha = m.sha256;
   return it;
 }
-async function loadArchive(more = false) {
+// One load at a time: the archive tab and the duplicate check both ask for it at startup.
+function loadArchive(more = false) {
+  if (archive.loading) return archive.loading;
+  archive.loading = loadArchiveNow(more).finally(() => { archive.loading = null; });
+  return archive.loading;
+}
+async function loadArchiveNow(more) {
   const st = $('archStatus'); st.hidden = false;
   setStatus(st, '', "טוען את הארכיון מהבלוקצ'יין…");
   if (!more) { archive.items = []; archive.byTxid.clear(); archive.lastConfirmed = null; archive.done = false; }
@@ -856,8 +885,11 @@ async function loadArchive(more = false) {
     renderArchive();
     if (S.doc) checkDuplicates();
   } catch {
-    setStatus(st, 'bad', online === false ? 'אין כאן גישה לרשת, ולכן אי אפשר לקרוא את הארכיון. אפשר לצפות בכתובת הארכיון ישירות ב-explorer.' : 'טעינת הארכיון נכשלה. נסו שוב בעוד רגע.');
+    archive.retries = (archive.retries || 0) + 1;
+    const again = archive.retries <= 5;
+    setStatus(st, 'bad', (online === false ? 'שירות הנתונים של ביטקוין (mempool.space) לא עונה כרגע, כנראה בגלל עומס.' : 'טעינת הארכיון נכשלה.') + (again ? ' מנסה שוב אוטומטית בעוד 20 שניות…' : ' לחצו "רענון" כדי לנסות שוב.'));
     if (online === false) { archive.items = []; renderArchive(true); }
+    if (again) setTimeout(() => { if (!archive.loaded) loadArchive(); }, 20000);
   }
 }
 function friendlyType(t) {
@@ -980,8 +1012,18 @@ async function openItem(it) {
   if (NET.ordinals) { const oa = document.createElement('a'); oa.href = `${NET.ordinals}/inscription/${it.txid}i0`; oa.target = '_blank'; oa.rel = 'noopener'; oa.textContent = 'ב-ordinals.com'; links.append(oa); }
   v.append(links);
   if (it.official && isDocument(it)) {
-    const rb = document.createElement('button'); rb.type = 'button'; rb.className = 'btn ghost small'; rb.textContent = 'הסרת המסמך שלי'; rb.style.marginTop = '10px';
-    rb.addEventListener('click', () => { rb.remove(); showRemoveBox(v, it, links); }); v.append(rb);
+    const acts = document.createElement('div'); acts.className = 'row'; acts.style.marginTop = '10px';
+    const rb = document.createElement('button'); rb.type = 'button'; rb.className = 'btn ghost small'; rb.textContent = 'הסרת המסמך שלי';
+    const rp = document.createElement('button'); rp.type = 'button'; rp.className = 'btn ghost small'; rp.textContent = 'דיווח על המסמך';
+    rb.addEventListener('click', () => { acts.querySelectorAll('.btn').forEach((b) => { b.disabled = true; }); showRemoveBox(v, it, acts); });
+    rp.addEventListener('click', () => { acts.querySelectorAll('.btn').forEach((b) => { b.disabled = true; }); showReportBox(v, it, acts); });
+    acts.append(rb, rp);
+    if (REPO) {
+      const op = document.createElement('a'); op.className = 'hint'; op.target = '_blank'; op.rel = 'noopener'; op.textContent = 'הסתרה (למפעיל האתר)';
+      op.href = newIssueUrl('הסתרת מסמך: כתבו כאן את הסיבה', `המסמך: ${it.txid}i0\n\nכותרת הבקשה מופיעה ביומן ההסרות הציבורי כסיבת ההסתרה. לביטול ההסתרה מסירים מהבקשה את התווית "הסתרה".`, 'הסתרה');
+      acts.append(op);
+    }
+    links.after(acts);
   }
   if (/^text\//.test(type || '') && !/html/.test(type)) { const pre = document.createElement('pre'); pre.dir = 'auto'; pre.textContent = dec.decode(content); v.append(pre); }
   else if (isOffice(type)) {
@@ -993,12 +1035,42 @@ async function openItem(it) {
   }
   else if (/^application\/pdf/.test(type || '')) { const f = document.createElement('iframe'); f.src = url; f.title = m.title || 'PDF'; v.append(f); }
 }
+// Anyone harmed by a document can report it. Email keeps the complaint private; a GitHub request is public.
+function showReportBox(v, it, after) {
+  const box = document.createElement('div'); box.className = 'banner info'; box.style.marginTop = '12px';
+  box.innerHTML = '<strong>דיווח על המסמך</strong><p style="margin:6px 0">מפעיל האתר בודק כל דיווח. אם יוחלט להסתיר את המסמך, הסיבה תופיע ביומן ההסרות. הדיווח בחינם.</p>'
+    + '<label class="f">סוג הפגיעה<select class="kind"><option>פגיעה בפרטיות</option><option>לשון הרע</option><option>הפרת זכויות יוצרים</option><option>צו שיפוטי</option><option>תוכן בלתי חוקי אחר</option><option>אחר</option></select></label>'
+    + '<label class="f">פירוט <small>מה הפגיעה, ומה הקשר שלכם למסמך</small><textarea class="details" style="min-height:70px"></textarea></label>'
+    + '<label class="f">פרטי קשר <small>לא חובה. נשלחים רק במייל, לא ב-GitHub.</small><input type="text" class="contact"></label>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" class="faith"> <span>אני מצהיר/ה שהמידע בדיווח נכון למיטב ידיעתי.</span></label>'
+    + '<div class="row"><a class="btn small mail" href="#">שליחה במייל (פרטי)</a><a class="btn ghost small gh" target="_blank" rel="noopener" href="#">פנייה ציבורית ב-GitHub</a></div>'
+    + '<p class="hint" style="margin-top:6px">כתובת הדיווח: <span class="mono addr"></span>. פנייה ב-GitHub גלויה לכולם, ולכן אל תכללו בה פרטים אישיים.</p><p class="err"></p>';
+  box.querySelector('.addr').textContent = CONFIG.reportEmail || '–';
+  if (!REPO) box.querySelector('.gh').remove();
+  const err = box.querySelector('.err');
+  const read = () => {
+    const kind = box.querySelector('.kind').value, details = box.querySelector('.details').value.trim();
+    if (details.length < 10) { err.textContent = 'כתבו פירוט קצר של הפגיעה (לפחות 10 תווים).'; return null; }
+    if (!box.querySelector('.faith').checked) { err.textContent = 'סמנו את ההצהרה כדי לשלוח.'; return null; }
+    err.textContent = '';
+    return { kind, details, title: `דיווח: ${kind} – מסמך ${it.txid.slice(0, 12)}…`, body: `המסמך: ${it.txid}i0\nסוג הפגיעה: ${kind}\n\n${details}\n\nהמדווח/ת הצהיר/ה שהמידע נכון למיטב ידיעתו/ה.` };
+  };
+  box.querySelector('.mail').addEventListener('click', (e) => {
+    const r = read(); if (!r) { e.preventDefault(); return; }
+    const contact = box.querySelector('.contact').value.trim();
+    e.currentTarget.href = `mailto:${CONFIG.reportEmail}?` + new URLSearchParams({ subject: r.title, body: r.body + (contact ? `\n\nפרטי קשר: ${contact}` : '') }).toString().replace(/\+/g, '%20');
+  });
+  const gh = box.querySelector('.gh');
+  if (gh) gh.addEventListener('click', (e) => { const r = read(); if (!r) { e.preventDefault(); return; } gh.href = newIssueUrl(r.title, r.body); });
+  after.after(box);
+}
 function showRemoved(v, it, r) {
   const h = document.createElement('h3'); h.style.cssText = 'font-family:var(--display);margin:0 0 6px;font-size:1.3rem'; h.textContent = 'מסמך שהוסר מהתצוגה';
   const p = document.createElement('p'); p.style.margin = '0 0 10px'; p.textContent = removedWhy(r) + '. המסמך נשאר רשום בבלוקצ\'יין, אבל האתר אינו מציג את הכותרת, התיאור והתוכן שלו. הפרטים שלמטה נשארים כדי שאפשר יהיה לאמת שמסמך עם טביעת האצבע הזו פורסם במועד הזה.';
   const dl = document.createElement('dl'); dl.className = 'ledger';
   const rows = [['מזהה המסמך', it.txid + 'i0', true], ['טביעת אצבע', it.metadata.sha256 || it.docSha, true], ['נרשם', fmtDate(it.time)]];
-  if (r.request) rows.push(['בקשת ההסרה', r.request, true], ['הוכחת בעלות', r.proof === 'key' ? 'חתימה במפתח הרישום (קובץ השחזור)' : 'חתימה של הארנק ששילם על הרישום']);
+  if (r.request || r.issue) rows.push(['בקשת ההסרה', r.request || r.issue, true]);
+  if (r.proof) rows.push(['הוכחת בעלות', r.proof === 'key' ? 'חתימה במפתח הרישום (קובץ השחזור)' : 'חתימה של הארנק ששילם על הרישום']);
   for (const [k, val, mono] of rows) { const dt = document.createElement('dt'); dt.textContent = k; const dd = document.createElement('dd'); dd.textContent = val; if (mono) dd.className = 'mono'; dl.append(dt, dd); }
   v.append(h, p, dl);
   v.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' });
@@ -1008,13 +1080,28 @@ function showRemoved(v, it, r) {
 function showRemoveBox(v, it, after) {
   const box = document.createElement('div'); box.className = 'banner info'; box.style.marginTop = '12px';
   const probe = E.createPlan(E.makeWithdrawDoc({ networkName: CONFIG.network, targetTxid: it.txid, proof: { type: 'wallet', address: 'x'.repeat(62), sig: 'x'.repeat(88) } }), NET.btc, new Uint8Array(32).fill(9), Math.max(1, Number($('feeRate').value) || 1));
-  box.innerHTML = '<strong>הסרת המסמך מהתצוגה</strong><p style="margin:6px 0">רק המפרסם יכול לבקש זאת, ולכן צריך להוכיח בעלות. המסמך יישאר רשום בבלוקצ\'יין, ובאתר יישאר דף עם התאריך וטביעת האצבע בלבד. הבקשה עצמה נרשמת בבלוקצ\'יין, ועולה כ-<span class="cost"></span>.</p>'
+  box.innerHTML = '<strong>הסרת המסמך מהתצוגה</strong><p class="proofIntro" style="margin:6px 0">רק המפרסם יכול לבקש זאת, ולכן צריך להוכיח בעלות. המסמך יישאר רשום בבלוקצ\'יין, ובאתר יישאר דף עם התאריך וטביעת האצבע בלבד. ההסרה בחינם.</p>'
     + '<div class="row"><label class="filebtn">הוכחה עם קובץ השחזור של המסמך<input type="file" accept=".json,application/json" hidden></label><button type="button" class="btn ghost small wallet">הוכחה עם הארנק ששילם (UniSat)</button></div><p class="err" style="margin-top:8px"></p>';
-  box.querySelector('.cost').textContent = fmtSats(probe.total);
   const err = box.querySelector('.err');
+  // Ownership proven: the signed request can be sent for free (GitHub or email) or registered on chain.
   const go = (proof) => {
-    const plan = E.createPlan(E.makeWithdrawDoc({ networkName: CONFIG.network, targetTxid: it.txid, proof }), NET.btc, E.newSecret(), Math.max(1, Number($('feeRate').value) || 1));
-    showTab('register'); startPayment(plan, '');
+    const text = E.removalRequestText(CONFIG.network, it.txid, proof);
+    box.querySelectorAll('.row, .proofIntro').forEach((x) => x.remove()); err.textContent = '';
+    const done = document.createElement('div');
+    done.innerHTML = '<p style="margin:6px 0"><strong>✓ הבעלות הוכחה, והבקשה נחתמה.</strong> בחרו איך לשלוח אותה:</p><div class="row sendRow"></div><p class="hint" style="margin-top:8px"></p><textarea class="mono reqText" dir="ltr" readonly style="min-height:90px;margin-top:6px"></textarea>';
+    const row = done.querySelector('.sendRow'), hint = done.querySelector('.hint');
+    done.querySelector('.reqText').value = text;
+    if (REPO) { const a = document.createElement('a'); a.className = 'btn small'; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'שליחה חינם דרך GitHub'; a.href = newIssueUrl(`בקשת הסרה של המפרסם: ${it.txid.slice(0, 12)}…`, text); row.append(a); }
+    const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'btn ghost small'; cp.textContent = 'העתקת הבקשה לשליחה במייל';
+    cp.addEventListener('click', () => copy(text, cp)); row.append(cp);
+    const ch = document.createElement('button'); ch.type = 'button'; ch.className = 'btn ghost small'; ch.textContent = `רישום בבלוקצ'יין (כ-${fmtSats(probe.total)})`;
+    ch.addEventListener('click', () => {
+      const plan = E.createPlan(E.makeWithdrawDoc({ networkName: CONFIG.network, targetTxid: it.txid, proof }), NET.btc, E.newSecret(), Math.max(1, Number($('feeRate').value) || 1));
+      showTab('register'); startPayment(plan, '');
+    });
+    row.append(ch);
+    hint.textContent = (REPO ? 'ב-GitHub (נדרש חשבון חינמי) הבקשה נבדקת אוטומטית, והמסמך מוסר תוך דקות. ' : '') + `במייל: הדביקו את הבקשה בהודעה אל ${CONFIG.reportEmail || 'מפעיל האתר'}. רישום בבלוקצ'יין עולה דמי רשת, אבל אינו תלוי באתר הזה: גם אתרים אחרים שמציגים את הארכיון יכירו בו.`;
+    box.append(done);
   };
   box.querySelector('input').addEventListener('change', async (e) => {
     err.textContent = ''; const f = e.target.files[0]; if (!f) return;
@@ -1029,9 +1116,14 @@ function showRemoveBox(v, it, after) {
   box.querySelector('.wallet').addEventListener('click', async () => {
     err.textContent = '';
     if (!window.unisat) { err.textContent = 'לא נמצא ארנק UniSat בדפדפן הזה. פתחו את הדף בדפדפן שבו מותקן הארנק ששילם, או השתמשו בקובץ השחזור.'; return; }
+    let addr, payers;
+    try { [addr] = await window.unisat.requestAccounts(); }
+    catch (x) { err.textContent = 'הארנק לא אישר חיבור לאתר: ' + String(x && x.message || x).slice(0, 140); return; }
+    err.textContent = 'בודק מאיזה ארנק שולם הרישום…';
+    try { payers = await payersOf(it); }
+    catch { err.textContent = 'לא הצלחנו לקרוא את פרטי התשלום מ-mempool.space (השירות לא ענה בזמן). נסו שוב בעוד דקה.'; return; }
+    err.textContent = '';
     try {
-      const [addr] = await window.unisat.requestAccounts();
-      const payers = await payersOf(it);
       if (!payers.includes(addr)) { err.textContent = `הארנק המחובר (${addr}) לא שילם על הרישום הזה. התשלום הגיע מ: ${payers.join(', ') || 'כתובת לא ידועה'}. החליפו חשבון ב-UniSat ונסו שוב.`; return; }
       const msg = E.withdrawMessage(CONFIG.network, it.txid);
       const sig = await window.unisat.signMessage(msg);

@@ -24,6 +24,13 @@ const SITE = RAW_SITE ? RAW_SITE.replace(/\/?$/, '/') : '';
 const SITE_NAME = config.siteName || 'ארכיב';
 const ARCHIVE = E.archiveAddress(NET.btc);
 const OPERATOR_HIDDEN = E.operatorHidden(config);
+// Requests on the repository's GitHub issues: the operator hides a document by adding the HIDE_LABEL label
+// to an issue that names it (the issue title is the public reason); a publisher's signed removal request
+// is verified and applied automatically. Read only when running on GitHub (or a test API).
+const GH_REPO = process.env.GITHUB_REPOSITORY || config.repo || '';
+const GH_API = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/$/, '');
+const GH_TOKEN = process.env.GITHUB_TOKEN || '';
+const HIDE_LABEL = 'הסתרה', DONE_LABEL = 'הוסר לבקשת המפרסם', REJECTED_LABEL = 'בקשה לא אומתה';
 const MAX_DECOMPRESSED = 64 * 1024 * 1024;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -71,10 +78,74 @@ async function payersOf(tx, meta, byTxid) {
   return ((cur && cur.vin) || []).map((v) => v.prevout && v.prevout.scriptpubkey_address).filter(Boolean);
 }
 
+async function gh(path, opts = {}) {
+  const headers = { accept: 'application/vnd.github+json', 'user-agent': 'archiv-build' };
+  if (GH_TOKEN) headers.authorization = 'Bearer ' + GH_TOKEN;
+  if (opts.body) headers['content-type'] = 'application/json';
+  const r = await fetch(GH_API + path, { ...opts, headers });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
+  return r.status === 204 ? null : r.json();
+}
+// A failure here stops the build on purpose: publishing without the hide list would show hidden documents again.
+async function listIssues() {
+  if (!GH_REPO) return [];
+  const out = [];
+  for (let page = 1; page <= 50; page++) {
+    const list = await gh(`/repos/${GH_REPO}/issues?state=all&per_page=100&page=${page}`);
+    if (!list) throw new Error('GitHub issues not readable for ' + GH_REPO);
+    out.push(...list.filter((i) => !i.pull_request));
+    if (list.length < 100) break;
+  }
+  return out;
+}
+const labelsOf = (issue) => (issue.labels || []).map((l) => typeof l === 'string' ? l : l.name);
+// Writing back to GitHub (labels, replies) is a courtesy; failures never stop the build.
+async function ghWrite(what, fn) { if (!GH_REPO || !GH_TOKEN) return; try { await fn(); } catch (e) { console.log(`  github: could not ${what}: ${e.message}`); } }
+async function ensureLabels() {
+  for (const [name, color, description] of [[HIDE_LABEL, 'b60205', 'מפעיל האתר מסתיר את המסמכים שבבקשה. כותרת הבקשה היא הסיבה הציבורית.'], [DONE_LABEL, '0e8a16', 'בקשת הסרה של המפרסם אומתה והמסמך הוסר'], [REJECTED_LABEL, 'e4e669', 'החתימה בבקשה לא תואמת למפרסם']]) {
+    await ghWrite('create label ' + name, async () => { if (!(await gh(`/repos/${GH_REPO}/labels/${encodeURIComponent(name)}`))) await gh(`/repos/${GH_REPO}/labels`, { method: 'POST', body: JSON.stringify({ name, color, description }) }); });
+  }
+}
+async function answer(issue, label, comment, close) {
+  if (labelsOf(issue).includes(label)) return; // answered on an earlier build
+  await ghWrite('answer issue #' + issue.number, async () => {
+    await gh(`/repos/${GH_REPO}/issues/${issue.number}/comments`, { method: 'POST', body: JSON.stringify({ body: comment }) });
+    await gh(`/repos/${GH_REPO}/issues/${issue.number}/labels`, { method: 'POST', body: JSON.stringify({ labels: [label] }) });
+    if (close) await gh(`/repos/${GH_REPO}/issues/${issue.number}`, { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) });
+  });
+}
+const isDocTx = (tx) => { const p = tx && parseTx(tx); return !!p && p.metadata.app === E.ARCHIVE_TAG && !['part', 'withdraw'].includes(p.metadata.kind); };
+
 // Which documents are removed from display, by whom and why.
 async function removals(txs, byTxid) {
   const removed = new Map(), rejected = [];
   for (const [txid, h] of OPERATOR_HIDDEN) removed.set(txid, { by: 'operator', reason: h.reason, date: h.date });
+  const issues = await listIssues();
+  if (issues.length) await ensureLabels();
+  // Operator: every archive document named in an issue that carries the hide label (open or closed).
+  for (const issue of issues) {
+    if (!labelsOf(issue).includes(HIDE_LABEL)) continue;
+    const ids = new Set(`${issue.title}\n${issue.body || ''}`.match(/[0-9a-f]{64}/g) || []);
+    for (const id of ids) if (isDocTx(byTxid.get(id)) && !removed.has(id)) removed.set(id, { by: 'operator', reason: String(issue.title || '').slice(0, 200), date: String(issue.created_at || '').slice(0, 10), issue: issue.html_url || '' });
+  }
+  // Publisher: signed removal requests sent as issues, verified like on-chain ones.
+  for (const issue of [...issues].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))) {
+    for (const req of E.parseRemovalRequests(issue.body)) {
+      const target = byTxid.get(req.target);
+      if (!isDocTx(target)) continue;
+      if (removed.has(req.target) && removed.get(req.target).by === 'publisher') continue;
+      const tp = parseTx(target);
+      const payers = req.proof.type === 'wallet' ? await payersOf(target, tp.metadata, byTxid) : [];
+      if (E.verifyRemovalRequest(req, { txid: target.txid, witness: target.vin[0].witness }, config.network, NET.btc, payers)) {
+        removed.set(req.target, { by: 'publisher', proof: req.proof.type, issue: issue.html_url || '', removedAt: Math.floor(Date.parse(issue.created_at) / 1000) || null, reason: '' });
+        await answer(issue, DONE_LABEL, `✓ הבקשה אומתה: החתימה שייכת למפרסם של המסמך ${req.target}i0. האתר מפסיק להציג את המסמך, ובמקומו נשאר דף עם התאריך וטביעת האצבע בלבד.`, true);
+      } else {
+        rejected.push([req.target, 'removal request in issue #' + issue.number + ': proof does not match the publisher']);
+        await answer(issue, REJECTED_LABEL, `הבקשה לא אומתה: החתימה אינה שייכת למפרסם של המסמך ${req.target}i0, ולכן המסמך לא הוסר. אם אתם המפרסמים, צרו בקשה חדשה מתוך האתר עם קובץ השחזור של הרישום או עם הארנק ששילם עליו.`, false);
+      }
+    }
+  }
   // Oldest first, so the first valid request for a document is the one recorded.
   for (const tx of [...txs].reverse()) {
     const p = parseTx(tx), m = p && p.metadata;
@@ -84,7 +155,7 @@ async function removals(txs, byTxid) {
     if (removed.has(m.target) && removed.get(m.target).by === 'publisher') continue;
     const payers = m.proof && m.proof.type === 'wallet' ? await payersOf(target, tp.metadata, byTxid) : [];
     if (!E.verifyWithdrawal(m, { txid: target.txid, witness: target.vin[0].witness }, config.network, NET.btc, payers)) { rejected.push([tx.txid, 'withdraw: proof does not match the publisher']); continue; }
-    removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: tx.txid, time: tx.status.block_time, reason: '' });
+    removed.set(m.target, { by: 'publisher', proof: m.proof.type, request: tx.txid, removedAt: tx.status.block_time, reason: '' });
   }
   return { removed, rejected };
 }
@@ -229,7 +300,7 @@ ${preview}
 
 // A removed document keeps a permanent page with its date and fingerprint, so the fact that it was
 // published at that time stays verifiable. Its title, description and content are not shown.
-const removedWhy = (g) => g.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (g.time ? ` ב-${heDate(g.time)}` : '') : 'הוסתר על ידי מפעיל האתר' + (g.date ? ` ב-${g.date}` : '') + (g.reason ? `. הסיבה: ${g.reason}` : '');
+const removedWhy = (g) => g.by === 'publisher' ? 'הוסר מהתצוגה לבקשת המפרסם' + (g.removedAt ? ` ב-${heDate(g.removedAt)}` : '') : 'הוסתר על ידי מפעיל האתר' + (g.date ? ` ב-${g.date}` : '') + (g.reason ? `. הסיבה: ${g.reason}` : '');
 function removedPage(g) {
   const id = g.txid + 'i0';
   const body = `<article>
@@ -242,6 +313,7 @@ function removedPage(g) {
 <dt>בלוק</dt><dd class="mono">${g.height}</dd>
 <dt>טביעת אצבע (SHA-256)</dt><dd class="mono">${esc(g.sha256 || '')}</dd>
 ${g.request ? `<dt>בקשת ההסרה</dt><dd><a class="mono" href="${NET.explorer}/tx/${g.request}" rel="noopener">${esc(g.request)}</a> (${g.proof === 'key' ? 'נחתמה במפתח הרישום' : 'נחתמה בארנק ששילם על הרישום'})</dd>` : ''}
+${!g.request && g.issue ? `<dt>הבקשה</dt><dd><a href="${esc(g.issue)}" rel="noopener">${esc(g.issue)}</a>${g.proof ? ` (${g.proof === 'key' ? 'נחתמה במפתח הרישום' : 'נחתמה בארנק ששילם על הרישום'})` : ''}</dd>` : ''}
 </dl>
 <div class="links"><a href="removed.html">יומן ההסרות</a><a href="${NET.explorer}/tx/${g.txid}" rel="noopener">העסקה ב-mempool.space</a></div>
 </article>`;
@@ -287,6 +359,8 @@ for (const it of items) {
 }
 for (const g of gone) writeFileSync(new URL(`${g.txid}.html`, P), removedPage(g));
 writeFileSync(new URL('removed.html', P), removedLog(gone));
+// The app reads this to stop showing removed documents, including those removed through GitHub requests.
+writeFileSync(new URL('removals.json', OUT), JSON.stringify({ generated: new Date().toISOString(), removed: gone.map((g) => ({ txid: g.txid, by: g.by, reason: g.reason || '', date: g.date || '', removedAt: g.removedAt || null, proof: g.proof || null, request: g.request || null, issue: g.issue || null })) }));
 writeFileSync(new URL('index.html', P), listPage(items));
 writeFileSync(new URL('index.json', P), JSON.stringify({
   archive: ARCHIVE, network: config.network, generated: new Date().toISOString(),

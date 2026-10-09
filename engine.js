@@ -12,7 +12,7 @@ export const NETWORKS = {
   signet: { btc: btc.TEST_NETWORK, api: 'https://mempool.space/signet/api', explorer: 'https://mempool.space/signet', ordinals: 'https://signet.ordinals.com' },
 };
 
-export const ARCHIVE_TAG = 'archiv-v1';      // fixes the archive address; never change after the first registration
+export const ARCHIVE_TAG = 'archiv-v2';      // fixes the archive address; never change after the first registration (v1 was the first demo)
 export const POSTAGE = 546n;                 // value of each inscription output, locked forever with it
 export const MAX_PART = 360_000;             // bytes per transaction; keeps each reveal under the 400k weight-unit limit
 export const MAX_PARTS = 20;
@@ -293,6 +293,27 @@ export function verifyWithdrawal(meta, target, networkName, net, payers = []) {
   } catch {}
   return false;
 }
+// Free removal: the same signed proof, sent off-chain (a GitHub request or an email) instead of being
+// registered on chain. The site's build verifies it exactly like an on-chain request.
+export function removalRequestText(networkName, targetTxid, proof) {
+  const data = JSON.stringify({ type: 'archiv-removal', network: networkName, target: targetTxid, proof });
+  return `בקשת הסרה חתומה של המפרסם, עבור המסמך ${targetTxid}i0.\nSigned removal request by the publisher of document ${targetTxid}i0.\n\n\`\`\`archiv-removal\n${data}\n\`\`\`\n`;
+}
+// Finds signed removal requests inside free text (an issue body, an email). Returns [{ network, target, proof }].
+export function parseRemovalRequests(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(/```archiv-removal\s*([\s\S]*?)```/g)) {
+    try {
+      const d = JSON.parse(m[1]);
+      if (d && d.type === 'archiv-removal' && /^[0-9a-f]{64}$/.test(d.target) && d.proof && typeof d.proof.sig === 'string') out.push({ network: String(d.network), target: d.target, proof: d.proof });
+    } catch {}
+  }
+  return out;
+}
+// The same check as an on-chain request.
+export const verifyRemovalRequest = (req, target, networkName, net, payers = []) =>
+  verifyWithdrawal({ app: ARCHIVE_TAG, kind: 'withdraw', network: req.network, target: req.target, proof: req.proof }, target, networkName, net, payers);
+
 // Hops from a registration's final transaction back to the transaction that paid for it.
 export const paymentDepth = (meta) => meta && meta.kind === 'multipart' ? 3 : 1;
 
