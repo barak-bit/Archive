@@ -1,0 +1,13 @@
+{
+  "network": "testnet4",
+  "siteName": "ארכיב",
+  "siteUrl": "",
+  "reportEmail": "report@example.com",
+  "hiddenTxids": [],
+  "publicPages": true,
+  "cardPayment": {
+    "label": "MoonPay",
+    "urlTemplate": "",
+    "signEndpoint": ""
+  }
+}
